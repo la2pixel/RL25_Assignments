@@ -4,6 +4,7 @@ import mdp
 import environment
 import util
 import optparse
+import numpy as np
 
 from gridworldClass import Gridworld
 
@@ -107,6 +108,8 @@ def runEpisode(agent, environment, discount, decision, display, message, pause, 
   returns = 0
   environment.reset()
   message("BEGINNING EPISODE: "+str(episode)+"\n")
+
+  step = 0  # track time step for discounted rewards
   while True:
 
     # DISPLAY CURRENT STATE
@@ -118,7 +121,8 @@ def runEpisode(agent, environment, discount, decision, display, message, pause, 
     actions = environment.getPossibleActions(state)
     if len(actions) == 0:
       message("EPISODE "+str(episode)+" COMPLETE: RETURN WAS "+str(returns)+"\n")
-      return 0  # TODO: IMPLEMENT "return" obtained in the episode
+      return returns  # TODO: IMPLEMENT "return" obtained in the episode
+      
 
     # GET ACTION (USUALLY FROM AGENT)
     action = decision(state)
@@ -136,7 +140,8 @@ def runEpisode(agent, environment, discount, decision, display, message, pause, 
     agent.update(state, action, nextState, reward)
 
     # TODO: make sure you compute the returns
-
+    returns += (discount ** step) * reward
+    step += 1
 
 
 def parseOptions():
@@ -290,6 +295,19 @@ if __name__ == '__main__':
     runEpisode(a, env, opts.discount, decisionCallback, displayCallback, messageCallback, pauseCallback, episode)
   if opts.episodes > 0:
     # print here
-    pass
+    returns = []
+  for episode in range(1, opts.episodes + 1):
+    episode_return = runEpisode(a, env, opts.discount, decisionCallback, displayCallback, messageCallback, pauseCallback, episode)
+    returns.append(episode_return)
+
+    mean_return = sum(returns) / len(returns)
+  if len(returns) == 1:
+      std_return = 0
+  else:
+      std_return = (sum((r - mean_return) ** 2 for r in returns) / (len(returns) - 1)) ** 0.5
+
+      print(f"Mean return: {mean_return:.6f}")
+      print(f"Standard deviation of return: {std_return:.6f}")
+
 
   print()
