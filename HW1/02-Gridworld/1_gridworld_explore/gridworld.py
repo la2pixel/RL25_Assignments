@@ -290,6 +290,7 @@ if __name__ == '__main__':
 
   # Exercise 1: implement the mean and std of the value estimation for the start state and print it out
   #  check what runEpisode returns
+  #
   returns = []
 
   if opts.episodes > 0:
