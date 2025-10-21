@@ -290,24 +290,20 @@ if __name__ == '__main__':
 
   # Exercise 1: implement the mean and std of the value estimation for the start state and print it out
   #  check what runEpisode returns
+  returns = []
 
-  for episode in range(1, opts.episodes+1):
-    runEpisode(a, env, opts.discount, decisionCallback, displayCallback, messageCallback, pauseCallback, episode)
   if opts.episodes > 0:
-    # print here
-    returns = []
-  for episode in range(1, opts.episodes + 1):
-    episode_return = runEpisode(a, env, opts.discount, decisionCallback, displayCallback, messageCallback, pauseCallback, episode)
-    returns.append(episode_return)
+      for episode in range(1, opts.episodes + 1):
+          episode_return = runEpisode(a, env, opts.discount, decisionCallback, displayCallback, messageCallback, pauseCallback, episode)
+          returns.append(episode_return)
 
-    mean_return = sum(returns) / len(returns)
-  if len(returns) == 1:
-      std_return = 0
-  else:
-      std_return = (sum((r - mean_return) ** 2 for r in returns) / (len(returns) - 1)) ** 0.5
+      mean_return = sum(returns) / len(returns)
+      if len(returns) == 1:
+          std_return = 0
+      else:
+          std_return = (sum((r - mean_return) ** 2 for r in returns) / (len(returns) - 1)) ** 0.5
 
       print(f"Mean return: {mean_return:.6f}")
       print(f"Standard deviation of return: {std_return:.6f}")
 
-
-  print()
+print()

@@ -1,34 +1,11 @@
-\documentclass{article}
-% \usepackage[a4paper, margin=1in]{geometry}
-\usepackage{graphicx}
-\usepackage{subcaption}
-\usepackage{amsmath}
+\documentclass[11pt]{article}
+
+\usepackage{amsmath,amssymb}
 \usepackage{float}
-\usepackage{hyperref}
-% \hypersetup{
-%     colorlinks=true,
-%     linkcolor=blue,
-%     filecolor=magenta,      
-%     urlcolor=cyan,
-% }
-\usepackage{amssymb}
-\usepackage{amsfonts}
-\usepackage{algorithm}
-\usepackage{algorithmic}
-\usepackage{microtype}
-\usepackage{float}
-
-
-
-
-\title{Reinforcement Learning HW 1}
-\author{Mert Bilgin (7034879) \url{mert.bilgin@student.uni-tuebingen.de}}
-\date{\today}
-
-
-
-
 \usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage[margin=1in]{geometry}
+
 % Define the invert color command
 \newcommand{\invertcolor}{%
     \pagecolor{black}% Set background to black
@@ -36,51 +13,160 @@
 }
 % \invertcolor
 
+\title{Reinforcement Learning HW 1}
+\author{
+Mert Bilgin (7034879) \\
+\url{mert.bilgin@student.uni-tuebingen.de}
+\and
+Lalitha Sivakumar (6300674) \\
+\url{lalitha.sivakumar@student.uni-tuebingen.de}
+}
+\date{\today}
+
 \begin{document}
 \maketitle
 
+\section{Optimal Policy}
 
-\section{Optimal Policy - Small Example Solution}
-
-
-The deterministic nature transforms the Bellman equation as follows:
+The deterministic nature of the system transforms the Bellman equation as follows:
 
 \[
-v_\pi(s) = \mathbb{E}_\pi \left[ G_t \mid S_t = s \right]
-\]
-We have the following sequence of rewards for the left policy:
-\[
-[1, 0, 1, 0, \dots] 
-\]
-with odd steps.
-
-\[
-v_{\pi_{\text{left}}}(s) = G_t \Big|_{\pi = \text{left}} 
-= \sum_{k=0}^{\infty} \gamma^k R_{t+k+1} \Big|_{\pi = \text{left}} 
-= \sum_{k=0}^{\infty} \gamma^{2k+1} 
-= \frac{\gamma}{1 - \gamma^2}
+v_\pi(s) = \mathbb{E}_\pi \left[ G_t \mid S_t = s \right],
+\qquad 
+G_t = R_{t+1} + \gamma R_{t+2} + \gamma^2 R_{t+3} + \cdots
+= \sum_{k=0}^{\infty} \gamma^k R_{t+k+1}.
 \]
 
-Similarly, the right policy has the following sequence of rewards with the even-indexed steps.
+\subsection*{Left Policy}
+
+The sequence of rewards for the \textbf{left policy} is:
+\[
+[1, 0, 1, 0, \dots]
+\]
+with nonzero rewards occurring at every second (odd) time step.
 
 \[
-\text{Sequence: } [0, 2, 0, 2, \dots]
+\begin{aligned}
+v_{\pi_{\text{left}}}(s) 
+&= G_t \Big|_{\pi=\text{left}} \\
+&= \sum_{k=0}^{\infty} \gamma^k R_{t+k+1}\Big|_{\pi=\text{left}} \\
+&= \sum_{k=0}^{\infty} \gamma^{2k} 
+= 1 + \gamma^2 + \gamma^4 + \cdots 
+= \frac{1}{1 - \gamma^2}.
+\end{aligned}
 \]
+
+\subsection*{Right Policy}
+
+For the \textbf{right policy}, the reward sequence is:
+\[
+[0, 2, 0, 2, \dots]
+\]
+with nonzero rewards at even-indexed steps.
 
 \[
-v_{\pi_{\text{right}}}(s) = G_t \Big|_{\pi = \text{right}} 
-= \sum_{k=0}^{\infty} \gamma^k R_{t+k+1} \Big|_{\pi = \text{right}} 
-= \sum_{k=0}^{\infty} 2 \gamma^{2k} 
-= \frac{2}{1 - \gamma^2}
+\begin{aligned}
+v_{\pi_{\text{right}}}(s)
+&= G_t \Big|_{\pi=\text{right}} \\
+&= \sum_{k=0}^{\infty} \gamma^k R_{t+k+1}\Big|_{\pi=\text{right}} \\
+&= \sum_{k=0}^{\infty} 2\gamma^{2k+1} 
+= 2\gamma + 2\gamma^3 + 2\gamma^5 + \cdots 
+= \frac{2\gamma}{1 - \gamma^2}.
+\end{aligned}
 \]
-
 
 
 \[
-\text{Since } \frac{2}{1 - \gamma^2} > \frac{\gamma}{1 - \gamma^2}
-\text{ for all } \gamma \in [0, 1], 
-\text{ policy } \pi_{\text{right}} \text{ is optimal.}
+v_{\pi_{\text{right}}}(s) > v_{\pi_{\text{left}}}(s)
+\quad \Longleftrightarrow \quad
+\frac{2\gamma}{1 - \gamma^2} > \frac{1}{1 - \gamma^2}
+\quad \Longleftrightarrow \quad
+2\gamma > 1
+\quad \Longleftrightarrow \quad
+\gamma > \tfrac{1}{2}.
 \]
 
+Thus:
+
+\[
+\begin{cases}
+\gamma < \tfrac{1}{2}: & \pi_{\text{left}} \text{ yields a higher return (move left each step)},\\[4pt]
+\gamma = \tfrac{1}{2}: & v_{\pi_{\text{left}}}=v_{\pi_{\text{right}}} \text{ (both equal)},\\[4pt]
+\gamma > \tfrac{1}{2}: & \pi_{\text{right}} \text{ yields a higher return (move right each step)}.
+\end{cases}
+\]
+
+\vspace{0.1cm}
+
+\[
+\boxed{
+\begin{aligned}
+\gamma &= 0   &\Rightarrow&\ \pi_{\text{left}},\\[4pt]
+\gamma &= 0.5 &\Rightarrow&\ \text{either } \pi_{\text{left}} \text{ or } \pi_{\text{right}},\\[4pt]
+\gamma &= 0.9 &\Rightarrow&\ \pi_{\text{right}}.
+\end{aligned}
+}
+\]
+
+
+\noindent When the discount factor $\gamma$ is small, only immediate rewards matter, so moving left (which immediately gives 1) is optimal. As $\gamma$ increases, future rewards become more important. Moving right initially gives 0 but leads to a delayed reward of 2, and as this future reward is discounted less, the right policy becomes better. At $\gamma = 0.5$, both policies yield the same total discounted return.
+
+\section{Value Estimation in Grid Worlds}
+
+\subsection{Gridworld: Getting started}
+Code is in gridworld.py
+
+\subsection{Implement return computation and value estimation}
+
+\textbf{(a)} We tried the following values of \(k\) (number of episodes) with default discount factor \(\gamma = 0.9\) to estimate the value of the start state under the random policy. 
+
+\begin{center}
+\begin{tabular}{c|c|c}
+\textbf{\(k\)} & \textbf{Mean Return} & \textbf{Std. Dev.} \\
+\hline
+1     & 0.000003 & 0.000000 \\
+100   & 0.003590 & 0.018780 \\
+500   & 0.002594 & 0.013022 \\
+1000  & 0.002057 & 0.011245 \\
+5000  & 0.002195 & 0.012753 \\
+10000 & 0.002214 & 0.013063 \\
+\end{tabular}
+\end{center}
+
+\textbf{(b)}  Using the sample size formula with 95\% confidence and margin of error \( E = \pm 0.0004 \):
+\[
+n = \left( \frac{z \times \sigma}{E} \right)^2
+\]
+For 95\% confidence, \( z = 1.96 \) which is obtained from the standard normal distribution table where the cumulative probability is 0.975 (leaving 2.5\% in each tail) 
+\vspace{0.1cm}
+With \( \sigma = 0.01306 \) and \( E = 0.0004 \):
+\[
+n = \left( \frac{1.96 \times 0.01306}{0.0004} \right)^2 = 4093
+\]
+
+
+\( n = 4093 \) episodes are required.
+
+\vspace{0.2cm}
+
+\textbf{(c)} For DiscountGrid with $\gamma = 0.95$, running $10,000$ episodes with a random agent produced mean return= $-6.394126$ and standard deviation: $3.783941$
+\vspace{0.1cm}
+
+To estimate the mean within $\pm 0.05$ with 95\% confidence, the required sample size is:
+\[
+n = \left( \frac{1.96 \times 3.783941}{0.05} \right)^2 \approx 21995
+\]
+
+At least $n = 21,995$ episodes are required.
+
+\vspace{0.2cm}
+
+\textbf{(d)} For $n = 500$ episodes, the 95\% confidence interval is:
+\[
+CI = 1.96 \times \frac{3.783941}{\sqrt{500}} \approx 1.96 \times 0.1693 \approx 0.33
+\]
+This is much larger than the required interval of $\pm 0.1$. 
+
+\textbf{Answer:} No, with 500 episodes, the confidence interval is approximately $\pm 0.33$, so the value estimate does not predict the long-term average within $\pm 0.1$.
 
 \end{document}
