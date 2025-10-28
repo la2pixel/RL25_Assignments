@@ -67,65 +67,83 @@ class RandomAgent(Agent):
 
 class ValueIterationAgent(Agent):
 
-  def __init__(self, mdp, discount = 0.9, iterations = 100):
-    """
-    Your value iteration agent should take an mdp on
-    construction, run the indicated number of iterations
-    and then act according to the resulting policy.
-    """
-    self.mdp = mdp
-    self.discount = discount
-    self.iterations = iterations
+    def __init__(self, mdp, discount=0.9, iterations=100):
+        """
+        Your value iteration agent should take an mdp on
+        construction, run the indicated number of iterations
+        and then act according to the resulting policy.
+        """
+        self.mdp= mdp
+        self.discount = discount
+        self.iterations = iterations
 
-    raise ValueError("Your code here.")
+        states = self.mdp.getStates()
+        self.V = {s: 0 for s in states}  #initialize all state values to 0
 
+        for i in range(iterations):
+            newV = self.V.copy()  #copy for synchronous updates
 
+            for state in states:
+                if self.mdp.isTerminal(state):
+                    newV[state] = 0
+                    continue
 
-  def getValue(self, state):
-    """
-    Look up the value of the state (after the indicated
-    number of value iteration passes).
-    """
-    raise ValueError("Your code here.")
+                newV[state] = max(
+                    sum(prob*(self.mdp.getReward(state, action, next_state) + discount * self.V[next_state])
+                        for next_state, prob in self.mdp.getTransitionStatesAndProbs(
+                            state, action
+                        )
+                    )
+                    for action in self.mdp.getPossibleActions(state)
+                )
 
-
-
-  def getQValue(self, state, action):
-    """
-    Look up the q-value of the state action pair
-    (after the indicated number of value iteration
-    passes).  Note that value iteration does not
-    necessarily create this quantity and you may have
-    to derive it on the fly.
-    """
-
-    raise ValueError("Your code here.")
+            self.V = newV  #update after going through all states
 
 
-
-  def getPolicy(self, state):
-    """
-    Look up the policy's recommendation for the state
-    (after the indicated number of value iteration passes).
-    """
-
-    raise ValueError("Your code here.")
+    def getValue(self, state):
+        """Return the value of the state."""
+        return self.V[state]
 
 
+    def getQValue(self, state, action):
+        """Return the Q-value of the (state, action) pair."""
+        q_pi_s_a = sum(
+            prob
+            * (
+                self.mdp.getReward(state, action, next_state)
+                + self.discount * self.V[next_state]
+            )
+            for next_state, prob in self.mdp.getTransitionStatesAndProbs(state, action)
+        )
+        return q_pi_s_a  
 
-  def getAction(self, state):
-    """
-    Return the action recommended by the policy.
-    """
-    return self.getPolicy(state)
+    def getPolicy(self, state):
+        """Return the best action according to the computed policy."""
+        if self.mdp.isTerminal(state):
+            return None
+
+        actions = self.mdp.getPossibleActions(state)
+        best_action = None
+        best_q_val = float("-inf")
+
+        for action in actions:
+            q_pi_s_a = self.getQValue(state, action)
+            if q_pi_s_a > best_q_val:
+                best_q_val = q_pi_s_a
+                best_action = action
+
+        return best_action
 
 
-  def update(self, state, action, nextState, reward):
-    """
-    Not used for value iteration agents!
-    """
+    def getAction(self, state):
+        """Return the action recommended by the policy."""
+        return self.getPolicy(state)
 
-    pass
+
+    def update(self, state, action, nextState, reward):
+        """Not used for value iteration agents."""
+        pass
+
 
 
 ################################################################################
