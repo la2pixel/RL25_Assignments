@@ -180,5 +180,26 @@ q_{\pi}(s,a)
 
 \section{Value Iteration}
 
+\subsection{2.3 Custom Gridworld Analysis}
+
+The custom gridworld is defined as follows:
+
+\begin{verbatim}
+grid = [[' ',' ',' ',+10],
+        [' ','#',-10,' '],
+        [' ','#',-10,' '],
+        [' ','#',+5,' '],
+        ['S',' ',' ',' ']]
+\end{verbatim}
+
+\noindent For discount = 0.9, noise = 0.2, livingReward = 0.0: Prefers shortest path to small reward from start, but from top neighbor state prefers longer path
+
+\noindent For discount = , noise = , livingReward = : 
+
+\noindent For discount = , noise = , livingReward = : 
+
+\noindent For discount = , noise = , livingReward = : 
+
+\noindent For discount = , noise = , livingReward = :
 
 \end{document}
