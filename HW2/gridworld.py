@@ -78,6 +78,14 @@ def getMazeGrid():
           ['S',' ',' ',' ']]
   return Gridworld(grid)
 
+def getCustomGrid():
+  grid = [[' ',' ',' ',' '],
+          [' ','#','#',+10],
+          [' ','#',-10,' '],
+          [' ','#',-10,' '],
+          [' ','#',+5,' '],
+          ['S',' ',' ',' ']]
+  return Gridworld(grid)
 
 
 def getUserAction(state, actionFunction):
@@ -206,7 +214,6 @@ def parseOptions():
 if __name__ == '__main__':
 
   opts = parseOptions()
-
   ###########################
   # GET THE GRIDWORLD
   ###########################
