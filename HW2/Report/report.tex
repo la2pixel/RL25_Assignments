@@ -179,9 +179,38 @@ q_{\pi}(s,a)
 \]
 
 \section{Value Iteration}
+\subsection{Gridworld: Getting started}
 
-\subsection{2.3 Custom Gridworld Analysis}
+Updated code in agent.py
 
+\subsection{Implement and test value iteration}
+\subsubsection*{a)} In \texttt{MazeGrid}, the start state only gets a non-zero value after 10 rounds of value iteration. This happens because value information can only propagate one step further from the goal with each iteration. Since the shortest path from the start to the goal is 10 moves, it takes 10 updates for the value to finally reach the start state.
+
+\subsubsection*{b)} While running the policy for \texttt{BridgeGrid} with the default discount and noise parameters, the agent always avoided crossing the bridge because there was too much risk of falling off and receiving a reward of $-100$. Increasing the discount factor did not make the agent cross either. However, when the noise was set to $0.0$, the agent started crossing the bridge to reach the high reward. 
+
+\subsubsection*{c)}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|c|c|c|}
+\hline
+\textbf{Case} & \textbf{Discount} & \textbf{Noise} \\ \hline
+a & 0.1 & 0.02 \\ \hline
+b & 0.1 & 0.3 \\ \hline
+c & 0.4 & 0.02 \\ \hline
+d & 0.4 & 0.1 \\ \hline
+\end{tabular}
+\caption{Parameter settings for different cases.}
+\end{table}
+
+\noindent
+Task (e) is impossible to achieve by tuning only the discount
+and noise. To make the agent avoid both exits and the cliff, a positive living
+reward would be required.
+
+\subsubsection*{d)} On \texttt{MazeGrid} with the default parameters and 100 value iteration, we get a start--state value of 0.28. In Exercise 1, we got values of 0.00034 and 0.00221 when running 10 and 10000 episodes respectively. We see a difference between the two values because the first exercise used a random policy where all actions were equally likely. Here, we use value iteration to find the optimal policy and then calculate the value of the start state. The start state value is higher for the optimal policy because the agent is more likely to reach the goal quickly and collect the higher reward.
+
+\subsection{Custom Gridworld Analysis}
 The custom gridworld is defined as follows:
 
 \begin{verbatim}
@@ -192,14 +221,18 @@ grid = [[' ',' ',' ',+10],
         ['S',' ',' ',' ']]
 \end{verbatim}
 
-\noindent For discount = 0.9, noise = 0.2, livingReward = 0.0: Prefers shortest path to small reward from start, but from top neighbor state prefers longer path
+\noindent \textbf{For discount = 0.9, noise = 0.2, livingReward = 0.0:} From the start state the agent prefers taking the shortest path to the small reward of +5, but if the agent is in the top next state from the start state it prefers the longer path. The reason is the discount factor where the longer path is one step close and the shorter path one step farther away. In the bottom left corner state the agent actually prefers taking the riskier path to the big reward due to the big reward being discounted
+less.
 
-\noindent For discount = , noise = , livingReward = : 
+\noindent 
+\textbf{For discount = 0.9, noise = 0.1, livingReward = 0.0:} For this configuration where the noise is smaller, the agent takes the shortest path to the big reward. The reason is now that due to the smaller noise, the risk is now less to fall into the -10 pits so the best action is now taking that riskier path.
 
-\noindent For discount = , noise = , livingReward = : 
+\noindent
+\textbf{For discount = 0.9, noise = 0.2, livingReward = 0.5:} When adding a living reward to the default configuration, the agent prefers taking the long safe path to the big reward. Interestingly, on the bottom next state to the small reward, the agent would prefer going the long path to the left to go to the big reward instead of taking the small reward by going a step up. This highlights the effect that the living reward has on the agent, where taking steps is also rewarded.
 
-\noindent For discount = , noise = , livingReward = : 
+\noindent
+\textbf{For discount = 1.0, noise = 0.2, livingReward = 0.5:} Using the previous configuration with discount = 1.0 is rewarded for being in the run as long as possible. Hence the positive terminal states becomes that states that the agent wants to avoid as it would end the run. If we assume that the top left corner is state (0,0) then the most valuable state is the state (0,2) as this state is the farthest away from all terminal states and the optimal action would be to walk into the wall. The distance to the terminal states still matter here because we have a noise factor where the agent could accidently go to a terminal state.
 
-\noindent For discount = , noise = , livingReward = :
-
+\noindent
+\textbf{For discount = 0.9, noise = 0.4, livingReward = 0.0:} With high noise, the agent wants to avoid the pitfall at all costs, it takes the same route as in the first configuration with a small difference when the state is the bottom right corner. Here, the agent goes to the left to avoid accidently falling into the pit.
 \end{document}
