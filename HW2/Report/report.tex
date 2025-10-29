@@ -39,6 +39,9 @@ q_{\pi}(s, a) = \sum_{s'} p(s' \mid s, a) \big[ r(s, a, s') + \gamma v_{\pi}(s')
 \]
 
 
+Since we have an undiscounted task, $\gamma = 1$ for the following steps. \\
+
+
 \noindent For \( q_{\pi}(11, \text{down}) \):
 
 \[
@@ -92,6 +95,8 @@ For the optimal policy $\pi_{*}$, we have:
 v_{*}(s) = \sum_{a \in \mathcal{A}} \pi_{*}(a \mid s) \, q_{*}(s, a)
 \]
 
+Here, we implicitly switch to $q_{*}$ with $\pi_{*}$, as the optimal action-value can be found greedily by following the path with the most expected reward path. \\
+
 Since the optimal policy selects the action that maximizes $q_{*}(s,a)$,
 \[
 \pi_{*}(a \mid s) =
@@ -123,7 +128,7 @@ Taking the maximum over all policies, we obtain:
 \max_{\pi} \left( R_s^a + \gamma \sum_{s' \in \mathcal{S}} P_{ss'}^a \, v_{\pi}(s') \right)
 \]
 
-Since the reward $R_s^a$ and transition probabilities $P_{ss'}^a$ do not depend on $\pi$, we can move the maximization inside the sum:
+Since the rewards $R_s^a$ and transition probabilities $P_{ss'}^a$ do not depend on $\pi$, we can move the maximization inside the sum because the optimum value function achieves the maximum return for every state $s \in \mathcal{S}$.
 \[
 q_{*}(s,a) = R_s^a + \gamma \sum_{s' \in \mathcal{S}} P_{ss'}^a \, \left( \max_{\pi} v_{\pi}(s') \right)
 \]
