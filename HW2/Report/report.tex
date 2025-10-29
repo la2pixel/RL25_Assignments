@@ -184,9 +184,9 @@ q_{\pi}(s,a)
 Updated code in agent.py
 
 \subsection{Implement and test value iteration}
-\subsubsection*{a)} In \texttt{MazeGrid}, the start state only gets a non-zero value after 10 rounds of value iteration. This happens because value information can only propagate one step further from the goal with each iteration. Since the shortest path from the start to the goal is 10 moves, it takes 10 updates for the value to finally reach the start state.
+\subsubsection*{a)} In \texttt{MazeGrid}, it takes 12 rounds of value iteration until it becomes non-zero because the value of each state is first initialized with 0 and we only receive a reward at the pre-terminal state while taking the optimal action. During value iteration, this state with non-zero reward can only change the neighboring state due to the bellman equation which only considers the current and the next state, therefore for start state to change to a non-zero value it takes the number of states from the start to the pre-terminal states, which is 12.
 
-\subsubsection*{b)} While running the policy for \texttt{BridgeGrid} with the default discount and noise parameters, the agent always avoided crossing the bridge because there was too much risk of falling off and receiving a reward of $-100$. Increasing the discount factor did not make the agent cross either. However, when the noise was set to $0.0$, the agent started crossing the bridge to reach the high reward. 
+\subsubsection*{b)} While running the policy for \texttt{BridgeGrid} with the default discount and noise parameters, the agent always avoided crossing the bridge because there was too much risk of falling off and receiving a reward of $-100$. Increasing the discount factor did not make the agent cross either. However, when the noise was set to an extremely small value like  $0.02$, the agent started crossing the bridge to reach the high reward. 
 
 \subsubsection*{c)}
 
@@ -199,14 +199,13 @@ a & 0.1 & 0.02 \\ \hline
 b & 0.1 & 0.3 \\ \hline
 c & 0.4 & 0.02 \\ \hline
 d & 0.4 & 0.1 \\ \hline
+e & 1 & 0.0 \\ \hline
+
 \end{tabular}
-\caption{Parameter settings for different cases.}
+\caption{\texttt{DiscountGrid} parameters for different cases.}
 \end{table}
 
-\noindent
-Task (e) is impossible to achieve by tuning only the discount
-and noise. To make the agent avoid both exits and the cliff, a positive living
-reward would be required.
+\
 
 \subsubsection*{d)} On \texttt{MazeGrid} with the default parameters and 100 value iteration, we get a start--state value of 0.28. In Exercise 1, we got values of 0.00034 and 0.00221 when running 10 and 10000 episodes respectively. We see a difference between the two values because the first exercise used a random policy where all actions were equally likely. Here, we use value iteration to find the optimal policy and then calculate the value of the start state. The start state value is higher for the optimal policy because the agent is more likely to reach the goal quickly and collect the higher reward.
 
