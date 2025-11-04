@@ -1,0 +1,68 @@
+\documentclass[11pt]{article}
+
+\usepackage{amsmath,amssymb}
+\usepackage{float}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage[margin=1in]{geometry}
+
+% Define the invert color command
+\newcommand{\invertcolor}{%
+    \pagecolor{black}% Set background to black
+    \color{white}% Set text color to white
+}
+% \invertcolor
+
+\title{Reinforcement Learning HW 3}
+\author{
+Mert Bilgin (7034879) \\
+\url{mert.bilgin@student.uni-tuebingen.de}
+\and
+Lalitha Sivakumar (6300674) \\
+\url{lalitha.sivakumar@student.uni-tuebingen.de}
+\and
+Kevin Van Le (7314700) \\
+\url{kevin-van.le@student.uni-tuebingen.de}
+}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Recap}
+
+\subsection*{a)}
+\subsection*{b)}
+\subsection*{c)}
+
+
+\section{TD($\lambda$)}
+\subsection{a)}
+\begin{align*}
+G_t^{(n)} &= R_{t+1} + \gamma R_{t+2} + \dots + \gamma^{n-1} R_{t+n} + \gamma^{n} V(S_{t+n}) \\
+G_{t+1}^{(n-1)} &= R_{t+2} + \gamma R_{t+3} + \dots + \gamma^{n-2} R_{t+n} + \gamma^{n-1} V(S_{t+n}) \\
+G_t^{(n)} &= R_{t+1} + \gamma \big( R_{t+2} + \gamma R_{t+3} + \dots + \gamma^{n-2} R_{t+n} + \gamma^{n-1} V(S_{t+n}) \big) \\
+&= R_{t+1} + \gamma G_{t+1}^{(n-1)}
+\end{align*}
+\subsection*{b)}
+\begin{align*}
+G_t^{\lambda} &= (1 - \lambda) \sum_{n=1}^{\infty} \lambda^{n-1} G_t^{(n)} \\[5pt]
+\text{Using part (a), } \quad
+G_t^{\lambda} &= (1 - \lambda) \sum_{n=1}^{\infty} \lambda^{n-1} \big( R_{t+1} + \gamma G_{t+1}^{(n-1)} \big) \\[5pt]
+&= R_{t+1} (1 - \lambda) \sum_{n=1}^{\infty} \lambda^{n-1} + \gamma (1 - \lambda) \sum_{n=1}^{\infty} \lambda^{n-1} G_{t+1}^{(n-1)}
+\end{align*}
+
+By the geometric series,
+\[
+\sum_{n=1}^{\infty} \lambda^{n-1} = \frac{1}{1 - \lambda}
+\]
+
+\begin{align*}
+G_t^{\lambda} &= R_{t+1} + \gamma (1 - \lambda) \sum_{n=1}^{\infty} \lambda^{n-1} G_{t+1}^{(n-1)} \\
+&= R_{t+1} + \gamma (1 - \lambda) \sum_{n=0}^{\infty} \lambda^{n} G_{t+1}^{(n)} \\[5pt]
+&= R_{t+1} + \gamma \Big[ (1 - \lambda) V(S_{t+1}) + \lambda G_{t+1}^{\lambda} \Big] \\
+\end{align*}
+\[
+\boxed{G_t^{\lambda} = R_{t+1} + \gamma \Big[ (1 - \lambda) V(S_{t+1}) + \lambda G_{t+1}^{\lambda} \Big]}
+\]
+\end{document}
