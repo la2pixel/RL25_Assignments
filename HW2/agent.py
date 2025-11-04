@@ -145,6 +145,113 @@ class ValueIterationAgent(Agent):
         pass
 
 
+################################################################################
+# Exercise 3
+
+class PolicyIterationAgent(Agent):
+
+    def __init__(self, mdp, discount=0.9, iterations=1):
+        """
+        Your policy iteration agent should take an mdp on
+        construction, run the indicated number of iterations
+        and then act according to the resulting policy.
+        """
+        self.mdp = mdp
+        self.discount = discount
+        self.iterations = iterations
+
+        states = self.mdp.getStates()
+
+        # 1. Initialization
+        self.V = {s: 0 for s in states}  # initialize all state values to 0
+        self.policy = {}
+        for state in states:
+            if not self.mdp.isTerminal(state):
+                actions = self.mdp.getPossibleActions(state)
+                self.policy[state] = actions[0] if actions else None
+            else:
+                self.policy[state] = None
+
+        # 2. Policy Iteration Loop
+        roundcounts = 0
+        while self.iterations > 0:
+            roundcounts += 1
+            # 2.1. Policy Evaluation
+            for i in range(100):  # hard coded to 100
+                newV = self.V.copy()  #copy for synchronous updates
+
+                for state in states:
+                    if self.mdp.isTerminal(state):
+                        newV[state] = 0
+                        continue
+
+                    action = self.policy[state]
+                    if action is not None:
+                        newV[state] = sum(
+                            prob * (self.mdp.getReward(state, action, next_state)
+                                    + discount * self.V[next_state])
+                            for next_state, prob in self.mdp.getTransitionStatesAndProbs(state, action)
+                        )
+
+                self.V = newV
+
+            # 2.2. Policy Improvement
+            policy_stable = True
+            for state in states:
+                if self.mdp.isTerminal(state):
+                    continue
+
+                old_action = self.policy[state]
+
+                # Find best action based on current value function
+                best_action = None
+                best_value = float('-inf')
+                for action in self.mdp.getPossibleActions(state):
+                    q_value = sum(
+                        prob * (self.mdp.getReward(state, action, next_state)
+                                + discount * self.V[next_state])
+                        for next_state, prob in self.mdp.getTransitionStatesAndProbs(state, action)
+                    )
+                    if q_value > best_value:
+                        best_value = q_value
+                        best_action = action
+
+                self.policy[state] = best_action
+
+                # Check if policy changed
+                if old_action != best_action:
+                    policy_stable = False
+
+            # If policy didn't change, we've converged
+            if policy_stable:
+                print(f"Converged after {roundcounts} rounds.")
+                break
+
+            if roundcounts >= self.iterations:
+                print(f"Reached specified policy iteration loops of {self.iterations}.")
+                break
+
+
+    def getValue(self, state):
+        """Return the value of the state."""
+        return self.V[state]
+
+    def getQValue(self, state, action):
+        """Return the Q-value of the (state, action) pair."""
+        q_pi_s_a = sum(
+            prob * (self.mdp.getReward(state, action, next_state)
+                    + self.discount * self.V[next_state])
+            for next_state, prob in self.mdp.getTransitionStatesAndProbs(state, action)
+        )
+        return q_pi_s_a
+
+    def getPolicy(self, state):
+        """Return the best action according to the computed policy."""
+        return self.policy.get(state, None)
+
+    def getAction(self, state):
+        """Return the action recommended by the policy."""
+        return self.getPolicy(state)
 
 ################################################################################
 # Below can be ignored for Exercise 2
