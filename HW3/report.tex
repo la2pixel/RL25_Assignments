@@ -95,7 +95,7 @@ Without noise \(n = 0\): \textbf{8 policy iterations} until the start state beco
 The reason it is 8 policy iterations and not 12 policy iterations from start to finish is because
 at the beginning the policy is initialized with taking the action going north for all states. For some states this is
 already the optimal action, hence for a state $s_t$ where the optimal action is going north and the next state $s_{t+1}$ have
-a non-zero value then state $s_t$ will also be updated with a non-zero value given that the discount is > 0. This value
+a non-zero value then state $s_t$ will also be updated with a non-zero value given that the discount is greater than 0. This value
 will propagate backwards to the subsequent states as long as the policy already takes the optimal action in a given state
 where the next state has a non-zero value.
 
