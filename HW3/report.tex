@@ -30,11 +30,18 @@ Kevin Van Le (7314700) \\
 \maketitle
 
 \section{Recap}
+\subsection*{a)} A Markov reward process (MRP) is just a Markov chain with rewards and a discount factor. Instead of moving between states, each transition gets some reward and we care about the long-term expected return from each state. Formally, an MRP is defined as a tuple $(\mathcal{S}, P, R, \gamma)$ where:
+\begin{itemize}
+    \item $\mathcal{S}$ is a finite set of states,
+    \item $P(S_{t+1} \mid S_t)$ is the state transition probability matrix,
+    \item $R(s)$ is the expected reward on transition,
+    \item $\gamma \in [0,1]$ is the discount factor.
+\end{itemize}
 
-\subsection*{a)}
-\subsection*{b)}
-\subsection*{c)}
+\subsection*{b)} A MDP could be reduced to MRP when the decision-making part is removed.
+This happens when we fix a policy $\pi(a \mid S_t)$ that determines which action to take in each state. 
 
+\subsection*{c)} MRPs can be solved in closed form as they only have states, transitions, and rewards which we can describe as a system of linear equations. However in MDPs include actions, so the agent must choose among different options that affect future states and rewards. We have a max operation in the Bellman optimality equation, making it non-linear. Therefore, it can't be solved in closed form and require iterative methods for optimal solution.
 
 \section{TD($\lambda$)}
 \subsection{a)}
