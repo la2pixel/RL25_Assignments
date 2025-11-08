@@ -1,0 +1,101 @@
+\documentclass[11pt]{article}
+
+\usepackage{amsmath,amssymb}
+\usepackage{float}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage[margin=1in]{geometry}
+
+% Define the invert color command
+\newcommand{\invertcolor}{%
+    \pagecolor{black}% Set background to black
+    \color{white}% Set text color to white
+}
+% \invertcolor
+
+\title{Reinforcement Learning HW 3}
+\author{
+Mert Bilgin (7034879) \\
+\url{mert.bilgin@student.uni-tuebingen.de}
+\and
+Lalitha Sivakumar (6300674) \\
+\url{lalitha.sivakumar@student.uni-tuebingen.de}
+\and
+Kevin Van Le (7314700) \\
+\url{kevin-van.le@student.uni-tuebingen.de}
+}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Coding Questions}
+
+Questions 1-2 are in \texttt{4\_MultiArmedBandits.ipynb} file.
+
+\subsection*{Question 3}
+\subsection*{Question 4}
+
+
+\section{Theory Questions}
+
+\subsection*{1: Linear regret for $\varepsilon$-Greedy}
+
+We consider a $K$-armed bandit with optimal arm $a^*$ and means $(\mu_1, \dots, \mu_K)$.
+For each suboptimal arm $a \neq a^*$, define
+\[
+\Delta_a = \mu^* - \mu_a > 0,
+\qquad
+\Delta_{\min} = \min_{a \neq a^*} \Delta_a.
+\]
+
+The regret can be written as
+\[
+R_\nu(T)
+= T \mu^* - \mathbb{E}\Big[\sum_{t=1}^T R_t\Big]
+= \sum_{a \neq a^*} \Delta_a \, \mathbb{E}[N_a(T)],
+\]
+where $N_a(T)$ is the number of times arm $a$ is pulled up to time $T$.
+
+In $\varepsilon$-greedy with fixed $\varepsilon$, each round is:
+\begin{itemize}
+    \item exploratory with probability $\varepsilon$, choosing an arm uniformly in $\{1,\dots,K\}$;
+    \item exploitative with probability $1-\varepsilon$.
+\end{itemize}
+During exploration, for any suboptimal arm $a \neq a^*$,
+\[
+\mathbb{P}(A_t = a \text{ in exploration})
+= \varepsilon \cdot \frac{1}{K}.
+\]
+Thus, counting only exploration pulls,
+\[
+\mathbb{E}[N_a(T)]
+\;\ge\;
+\sum_{t=1}^T \varepsilon \cdot \frac{1}{K}
+=
+\frac{\varepsilon T}{K},
+\]
+since ignoring exploitation can only underestimate $N_a(T)$.
+
+\noindent
+Summing over all suboptimal arms,
+\[
+\sum_{a \neq a^*} \mathbb{E}[N_a(T)]
+\;\ge\;
+\frac{\varepsilon T}{K} (K-1).
+\]
+Using $\Delta_a \ge \Delta_{\min}$ for all $a \neq a^*$, we obtain
+\[
+R_\nu(T)
+= \sum_{a \neq a^*} \Delta_a \, \mathbb{E}[N_a(T)]
+\;\ge\;
+\Delta_{\min} \sum_{a \neq a^*} \mathbb{E}[N_a(T)]
+\;\ge\;
+\varepsilon \,\frac{K-1}{K}\, \Delta_{\min}\, T.
+\]
+
+Thus, fixed $\varepsilon$-greedy incurs linear regret in $T$.
+
+
+
+\end{document}
