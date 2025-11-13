@@ -5,7 +5,8 @@
 \usepackage{xcolor}
 \usepackage{hyperref}
 \usepackage[margin=1in]{geometry}
-
+ \usepackage{graphicx} 
+ 
 % Define the invert color command
 \newcommand{\invertcolor}{%
     \pagecolor{black}% Set background to black
@@ -13,7 +14,7 @@
 }
 % \invertcolor
 
-\title{Reinforcement Learning HW 3}
+\title{Reinforcement Learning HW 4}
 \author{
 Mert Bilgin (7034879) \\
 \url{mert.bilgin@student.uni-tuebingen.de}
@@ -34,8 +35,221 @@ Kevin Van Le (7314700) \\
 Questions 1-2 are in \texttt{4\_MultiArmedBandits.ipynb} file.
 
 \subsection*{Question 3}
+
+\subsection{Experimental Setup}
+
+We compared two baseline bandit algorithms:
+\begin{itemize}
+    \item \textbf{$\epsilon$-greedy}: Explores randomly with probability $\epsilon$, exploits with probability $1-\epsilon$
+    \item \textbf{Explore-Then-Commit (ETC)}: Explores each arm $m$ times, then commits to the best arm forever
+\end{itemize}
+
+\textbf{Environment}: 
+\begin{itemize}
+    \item $K = 3$ arms with means $\boldsymbol{\mu} = [0., 1., 2., 3.]$
+    \item Gaussian rewards with variance $\sigma^2 = 0.5$
+    \item Horizon $T = 10,000$ time steps
+    \item $N_{\text{mc}} = 100$ Monte Carlo runs
+\end{itemize}
+
+\subsubsection{$\epsilon$-Greedy Algorithm}
+
+At each round $t$, select action:
+\begin{equation}
+A_t = \begin{cases}
+\text{Uniform}(\{1, \ldots, K\}) & \text{with probability } \epsilon \\
+\arg\max_{a \in [K]} \hat{\mu}_a(t) & \text{with probability } 1-\epsilon
+\end{cases}
+\end{equation}
+
+where $\hat{\mu}_a(t) = \frac{1}{N_a(t)} \sum_{s: A_s=a} R_s$ is the empirical mean reward.
+
+\textbf{Theoretical regret}:
+\begin{equation}
+\mathcal{R}_{\epsilon}(T) \geq \epsilon \frac{K-1}{K} \Delta_{\min} \cdot T = \Omega(T)
+\end{equation}
+
+where $\Delta_{\min} = \min_{a: \mu_a < \mu^\star} (\mu^\star - \mu_a)$.
+
+\subsubsection{Explore-Then-Commit (ETC)}
+
+\textbf{Phase 1 (Exploration)}: For $t = 1, \ldots, Km$, pull each arm exactly $m$ times in round-robin fashion:
+\begin{equation}
+A_t = \left\lfloor \frac{t-1}{m} \right\rfloor \bmod K
+\end{equation}
+
+\textbf{Phase 2 (Commitment)}: For $t > Km$, always pull:
+\begin{equation}
+A_t = a^\star_m := \arg\max_{a \in [K]} \hat{\mu}_a(Km)
+\end{equation}
+
+\textbf{Theoretical regret} (with optimal $m \sim \sqrt{T}$):
+\begin{equation}
+\mathcal{R}_{\text{ETC}}(T) = O\left(\sqrt{KT \log T}\right)
+\end{equation}
+
+\subsection{Experimental Results}
+
+\subsubsection{Experiment 1: ETC(10) vs $\epsilon$-greedy(0.1) - Log Scale}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.5\textwidth]{eps01vsetc10.png}
+\caption{ETC(10) vs $\epsilon$-greedy(0.1) on log scale}
+\label{fig:exp1}
+\end{figure}
+
+\textbf{Parameters}: $m = 10$, $\epsilon = 0.1$
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|l|c|c|}
+\hline
+\textbf{Algorithm} & \textbf{Regret at $T=10,000$} & \textbf{Growth Pattern} \\
+\hline
+$\epsilon$-greedy(0.1) & $\approx 1,600$ & Strong upward curve \\
+ETC(10) & $\approx 100$ & Nearly flat \\
+\hline
+\end{tabular}
+\caption{Performance comparison: ETC(10) vs $\epsilon$-greedy(0.1)}
+\end{table}
+
+\subsection{Conclusions}
+
+Based on our experimental results:
+
+\begin{enumerate}
+    \item \textbf{ETC significantly outperforms $\epsilon$-greedy} when $m$ is appropriately chosen (16$\times$ better in our best case).
+    
+    \item Both ETC and $\epsilon$-greedy achieve sublinear regret at best, while algorithms like UCB achieve $O(\log T)$ regret.
+    
+    \item Both algorithms work for Gaussian and Bernoulli rewards (implemented in our code).
+\end{enumerate}
+
+
 \subsection*{Question 4}
 
+\subsection{Experimental Setup}
+
+We implemented and evaluated the Upper Confidence Bound (UCB) algorithm, comparing it against our baseline algorithms from Question 3.
+
+\textbf{Environment}: 
+\begin{itemize}
+    \item $K = 4$ arms with means $\boldsymbol{\mu} = [0., 1., 2., 3.]$
+    \item Gaussian rewards with variance $\sigma^2 = 0.5$
+    \item Horizon $T = 10,000$ time steps
+    \item $N_{\text{mc}} = 50$ Monte Carlo runs
+\end{itemize}
+
+
+\subsubsection{Theoretical Lower Bound}
+
+\begin{equation}
+\mathcal{R}_{\text{LB}}(T) = \sum_{a: \Delta_a > 0} \frac{2\sigma^2}{\Delta_a} \log(T)
+\end{equation}
+
+For our setup with $\boldsymbol{\mu} = [0., 1., 2., 3.]$ and $\sigma^2 = 0.5$:
+
+First, we compute the gaps $\Delta_a = \mu^\star - \mu_a$ where $\mu^\star = 3$:
+\begin{equation}
+\Delta_1 = 3 - 0 = 3, \quad \Delta_2 = 3 - 1 = 2, \quad \Delta_3 = 3 - 2 = 1, \quad \Delta_4 = 0
+\end{equation}
+
+Then:
+\begin{align}
+\mathcal{R}_{\text{LB}}(T) &= \sum_{a=1}^{3} \frac{2\sigma^2}{\Delta_a} \log(T) \\
+&= \left(\frac{2 \times 0.5}{3} + \frac{2 \times 0.5}{2} + \frac{2 \times 0.5}{1}\right) \log(T) \\
+&= \left(\frac{1}{3} + \frac{1}{2} + 1\right) \log(T) \\
+&= \left(0.333 + 0.5 + 1\right) \log(T) \\
+&= 1.833 \log(T)
+\end{align}
+
+At $T=10,000$: 
+\begin{equation}
+\mathcal{R}_{\text{LB}}(10,000) \approx 1.833 \times \log(10,000) \approx 1.833 \times 9.21 \approx 16.9
+\end{equation}
+
+\subsection{Experimental Results}
+
+\subsubsection{Effect of UCB Variance Parameter}
+
+Comparing UCB($\alpha$) for $\alpha \in \{0.1, 0.5, 4.0\}$ vs baselines
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|l|c|c|c|}
+\hline
+\textbf{Algorithm} & \textbf{Regret at $T=10,000$} & \textbf{Growth Rate} & \textbf{Shape on Log Scale} \\
+\hline
+$\epsilon$-greedy(0.1) & $\approx 1,600$ & $O(T)$ & Strong upward curve \\
+ETC(10) & $\approx 150$ & Nearly constant & Flat \\
+UCB(0.1) & $\approx 10$ & $O(\log T)$ & Straight line \\
+UCB(0.5) & $\approx 50$ & $O(\log T)$ & Straight line \\
+UCB(4.0) & $\approx 130$ & $O(\log T)$ & Straight line \\
+\hline
+\end{tabular}
+\caption{Performance comparison with different UCB parameters}
+\end{table}
+
+\textbf{Effect of parameter $\alpha$}:
+
+\begin{itemize}
+    \item \textbf{Too small $\alpha$ (e.g., 0.1, 0.5)}: 
+        Doesn't give suboptimal arms enough chances
+    
+    \item \textbf{Too large $\alpha$ (e.g., 4.0)}:
+        Keeps pulling suboptimal arms too long
+
+\end{itemize}
+
+\begin{equation}
+\boxed{\text{UCB achieves } O(\log T) \text{ regret even with suboptimal } \alpha}
+\end{equation}
+
+Even with $\alpha = 0.5$ or $\alpha = 4.0$, we obtain logarithmic regret. The constant factor changes, but the growth rate stays optimal.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.5\textwidth]{ucb.png}
+\caption{UCB comparisons}
+\label{fig:exp1}
+\end{figure}
+
+On the log-scale plot (see Figure 2), all UCB variants show \textbf{straight lines} except the one with 0.1 parameter value, confirming logarithmic regret.
+
+\subsubsection{Experiment 2: UCB vs All Baselines with Lower Bound}
+
+\textbf{Parameters}: UCB(1.0) vs $\epsilon$-greedy(0.1) vs ETC(50), with theoretical lower bound
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.5\textwidth]{theorylogscale.png}
+\caption{Experiment vs Theory}
+\label{fig:exp1}
+\end{figure}
+
+Figure 3 shows the cumulative regret on a log scale with the theoretical lower bound (black stars).
+
+On a log-scale x-axis, if regret grows as $O(\log T)$, it appears as a \textbf{straight line} (since plotting $\log(\log T)$ vs $\log T$ is approximately linear for large $T$).
+\subsection{Conclusions}
+
+Based on our experimental results for Question 4:
+
+\begin{enumerate}
+    \item $\mathcal{R}(T) = O(\log T)$, confirmed by straight lines on log-scale plots.
+    
+    \item Empirically within 2$\times$ of the theoretical lower bound.
+    
+    \item Works well for $\alpha \in [0.1, 0.5]$, all maintaining logarithmic regret with different constants.
+    
+    \item \textbf{UCB dominates baselines}:
+    \begin{itemize}
+        \item 4-100$\times$ better than $\epsilon$-greedy
+        \item 2--3$\times$ better than ETC
+    \end{itemize}
+    
+    \item Our experiments strongly support the theory that UCB achieves near-optimal performance through the optimism principle.
+\end{enumerate}
 
 \section{Theory Questions}
 
