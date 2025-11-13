@@ -310,6 +310,65 @@ R_\nu(T)
 
 Thus, fixed $\varepsilon$-greedy incurs linear regret in $T$.
 
+\subsection*{2: Explore-Then-Commit (ETC)}
+
+\subsubsection*{(a)} 
+For a suboptimal arm $a \in [K]$, we define:
+$$
+\mathbb{E}[N_a(T)] = \mathbb{E}\left[\sum_{t=1}^T \mathbf{1}_{A_t = a}\right] = \sum_{t=1}^T \mathbb{P}(A_t = a)
+$$
+
+\noindent Each arm $a \in [K]$ is chosen $m$ times during the ETC exploration phase.
+
+\noindent For the remaining $(T - mK)$ rounds, the arm $\hat{a}$ with highest empirical average is chosen, where $\hat{a} = \arg\max_k \hat{\mu}_k$.
+
+\noindent Therefore,
+$$
+\mathbb{E}[N_a(T)] = m + \mathbb{P}(\hat{a} = a) \cdot (T - mK).
+$$
+
+\subsubsection*{(b)} 
+\noindent Define $\hat{\mu}_a = \frac{1}{m} \sum_{i=1}^m r_{ai}$, the reward when using arm $a$ in exploration round $i$ (total $m$ rounds for each arm).
+
+\noindent By Hoeffding's inequality,
+$$
+\mathbb{P}(|\hat{\mu}_a - \mu_a| \ge \varepsilon) \le 2 \cdot \exp\left(-\frac{m\varepsilon^2}{2\sigma^2}\right),
+$$
+where $\hat{\mu}_a$ is the empirical mean of arm $a$, $\mu_a$ is the true mean of arm $a$, and $\sigma^2$ is the variance.
+
+\noindent To select a wrong arm, we need $\hat{\mu}_a \ge \hat{\mu}_{a^*}$. This occurs when
+$$
+\mathbb{P}(\hat{\mu}_a \ge \hat{\mu}_{a^*}) = \mathbb{P}\big((\hat{\mu}_a - \mu_a) + (\mu_a - \mu_{a^*}) + (\mu_{a^*} - \hat{\mu}_{a^*}) \ge 0\big).
+$$
+\noindent Since $\mu_a - \mu_{a^*} = -\Delta_a$, we have
+$$
+\mathbb{P}(\hat{\mu}_a \ge \hat{\mu}_{a^*}) = \mathbb{P}\big((\hat{\mu}_a - \mu_a) - \Delta_a + (\mu_{a^*} - \hat{\mu}_{a^*}) \ge 0\big).
+$$
+\noindent This is bounded by
+$$
+\mathbb{P}\Big(\hat{\mu}_a - \mu_a \ge \frac{\Delta_a}{2}\Big) + \mathbb{P}\Big(\mu_{a^*} - \hat{\mu}_{a^*} \ge \frac{\Delta_a}{2}\Big).
+$$
+
+\noindent Using Hoeffding's inequality for each term:
+$$
+\mathbb{P}\Big(\hat{\mu}_a - \mu_a \ge \frac{\Delta_a}{2}\Big) \le \exp\left(-\frac{m\left(\frac{\Delta_a}{2}\right)^2}{2\sigma^2}\right)
+$$
+and
+$$
+\mathbb{P}\Big(\mu_{a^*} - \hat{\mu}_{a^*} \ge \frac{\Delta_a}{2}\Big) \le \exp\left(-\frac{m\left(\frac{\Delta_a}{2}\right)^2}{2\sigma^2}\right).
+$$
+\noindent Therefore,
+$$
+\mathbb{P}(\hat{\mu}_a \ge \hat{\mu}_{a^*}) \le \exp\left(-\frac{m\Delta_a^2}{8\sigma^2}\right) + \exp\left(-\frac{m\Delta_a^2}{8\sigma^2}\right) = 2 \cdot \exp\left(-\frac{m\Delta_a^2}{8\sigma^2}\right).
+$$
+
+\subsubsection*{(c)} 
+\noindent To minimize the upper bound $\min_m 2 \cdot \exp\left(-\frac{m\Delta_a^2}{8\sigma^2}\right)$, we want $m \to \infty$, i.e., when we do infinitely many exploration rounds. However, this is not possible as we have $T$ rounds in total and $0 < m < \frac{T}{K}$. 
+
+\noindent Therefore, to minimize the upper bound, we choose
+$$
+m = \frac{T}{K}.
+$$
 
 
 \end{document}
