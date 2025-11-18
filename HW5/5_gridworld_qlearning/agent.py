@@ -169,7 +169,7 @@ class QLearningAgent(Agent):
     self.setDiscount(discount)
     self.actionFunction = actionFunction
 
-    raise ValueError("Your code here.")
+    self.qValues = util.Counter()
 
 
 
@@ -191,9 +191,13 @@ class QLearningAgent(Agent):
     """
     Look up the current value of the state.
     """
-
-    raise ValueError("Your code here.")
-
+    actions = self.actionFunction(state)
+    
+    if len(actions) == 0:
+        return 0.0
+    
+    return max([self.getQValue(state, action) for action in actions])
+    
 
 
   def getQValue(self, state, action):
@@ -201,17 +205,28 @@ class QLearningAgent(Agent):
     Look up the current q-value of the state action pair.
     """
 
-    raise ValueError("Your code here.")
-
+    return self.qValues.getCount((state, action))
 
 
   def getPolicy(self, state):
     """
     Look up the current recommendation for the state.
     """
-
-    raise ValueError("Your code here.")
-
+    actions = self.actionFunction(state)
+    
+    if len(actions) == 0:
+        return None
+    
+    bestAction = None
+    bestValue = float('-inf')
+    
+    for action in actions:
+        qValue = self.getQValue(state, action)
+        if qValue > bestValue:
+            bestValue = qValue
+            bestAction = action
+    
+    return bestAction
 
 
   def getAction(self, state):
@@ -219,8 +234,16 @@ class QLearningAgent(Agent):
     Choose an action: this will require that your agent balance
     exploration and exploitation as appropriate.
     """
-
-    raise ValueError("Your code here.")
+    actions = self.actionFunction(state)
+    
+    if len(actions) == 0:
+        return None
+    
+    # Epsilon-greedy action selection
+    if random.random() < self.epsilon:
+        return random.choice(actions)
+    else:
+        return self.getPolicy(state)
 
 
 
@@ -228,8 +251,15 @@ class QLearningAgent(Agent):
     """
     Update parameters in response to the observed transition.
     """
-
-    raise ValueError("Your code here.")
+ 
+    currentQ = self.getQValue(state, action)
+    nextValue = self.getValue(nextState)
+    
+    sample = reward + self.discount * nextValue
+    
+    # Update Q-value
+    newQ = currentQ + self.learningRate * (sample - currentQ)
+    self.qValues[(state, action)] = newQ
 
   def reset(self):
     """
