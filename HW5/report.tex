@@ -1,0 +1,69 @@
+\documentclass[11pt]{article}
+
+\usepackage{amsmath,amssymb}
+\usepackage{float}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage[margin=1in]{geometry}
+
+% Define the invert color command
+\newcommand{\invertcolor}{%
+    \pagecolor{black}% Set background to black
+    \color{white}% Set text color to white
+}
+% \invertcolor
+
+\title{Reinforcement Learning HW 5}
+\author{
+Mert Bilgin (7034879) \\
+\url{mert.bilgin@student.uni-tuebingen.de}
+\and
+Lalitha Sivakumar (6300674) \\
+\url{lalitha.sivakumar@student.uni-tuebingen.de}
+\and
+Kevin Van Le (7314700) \\
+\url{kevin-van.le@student.uni-tuebingen.de}
+}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Q-Learning and SARSA}
+
+% Questions 1-2 are in \texttt{4\_MultiArmedBandits.ipynb} file.
+
+\subsection*{a)} Q-learning is considered an off-policy control method because, when updating the Q-value for a given state-action pair it does not use the action taken by the current policy. Instead, it updates based on the maximum possible future reward in the next state across all actions, effectively learning about the optimal policy regardless of the policy being followed during exploration.
+
+\subsection*{b)} No, Q-learning and SARSA are not the same even with greedy action selection. Q-learning is off-policy and always updates using the maximum Q-value for the next state, while SARSA updates based on the actual action taken. They can still make different updates, especially if there are ties in Q-values and the tie breaking is random.
+
+\subsection*{c)}
+
+\subsubsection*{a)} The optimal action is to choose \textbf{right}, since it leads to an immediate reward of 0, which is higher than the expected return of $-0.1$ from taking the left action.\\[1em]
+
+\subsubsection*{b)} Q-learning will observe that the right action from $A$ always leads to a return of $0$, while the left action leads to random rewards averaging $-0.1$. Over time, the updates will favor the right action, as it consistently provides a higher expected value.
+ 
+
+\section{Hands-on the Gridworld}
+Changed code is updated in \texttt{agent.py} and \texttt{gridworld.py} files.
+
+\subsection{Q-Learning}
+
+\subsubsection*{a)} After training the agent for 100 episodes on the \texttt{MazeGrid}, the average return from the start state was only about 0.147, and the value estimates on the grid were less smooth and generally lower than the optimal values shown in the figure.
+
+\vspace{0.1in}
+
+\noindent This happens because Q-learning is a model‑free method that only updates values for states and actions that it actually encounters. With just 100 episodes the agent has not explored every part of the grid consistently. However in value iteration there's full access to the transition models and all states simultaneously get updated which allows it to converge to the optimal values.
+
+\vspace{0.1in}
+
+\noindent The Q-learning results become closer to the optimal values if we allow more learning and exploration. For example, increasing the number of episodes or using a higher exploration rate (larger $\epsilon$) helps the agent visit more states and refine its Q‑values.
+
+\subsubsection*{b)} After training the Q-learning agent on the \texttt{BridgeGrid} with no noise for 100 episodes, the learned Q-values differ from those produced by value iteration. In our run, the average return from the start state was approximately $-16.34$, with many of the states around the bridge having large negative Q-values. The agent strongly avoids the risky bridge area rather than moving toward the high reward on the right.
+
+\vspace{0.1in}
+\noindent
+This happens because Q-learning relies on exploration and the states around the bridge contain large negative penalties. During early exploration the agent quickly experiences poor returns when moving in that direction. It then learns to avoid the bridge entirely and exploits safer actions instead of discovering the optimal path. On the other hand, value iteration considers every possible action in every state and therefore always converges to the optimal policy.  Even running for a lot of episodes and higher value of epsilon, the agent still avoids the path on the right and chooses the safe action.
+
+\subsubsection*{c)}
+\end{document}
