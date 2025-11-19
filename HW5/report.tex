@@ -37,11 +37,17 @@ Kevin Van Le (7314700) \\
 
 \subsection*{b)} No, Q-learning and SARSA are not the same even with greedy action selection. Q-learning is off-policy and always updates using the maximum Q-value for the next state, while SARSA updates based on the actual action taken. They can still make different updates, especially if there are ties in Q-values and the tie breaking is random.
 
+\noindent----------------------------------------------------------------------------
+
+\vspace{0.5em}
+\noindent
+In SARSA the behavior and target policy are identical. In Q-Learning the values are updated using the target policy which is greedy while the the behavior policy is used to interact with the environment. If the agents action selection (interaction with the environment) is greedy, then behavior and target policy are also identical. Therefore, SARSA and  Q-learning would be identical in this case.
+
 \subsection*{c)}
 
 \subsubsection*{a)} The optimal action is to choose \textbf{right}, since it leads to an immediate reward of 0, which is higher than the expected return of $-0.1$ from taking the left action.\\[1em]
 
-\subsubsection*{b)} Q-learning will observe that the right action from $A$ always leads to a return of $0$, while the left action leads to random rewards averaging $-0.1$. Over time, the updates will favor the right action, as it consistently provides a higher expected value.
+\subsubsection*{b)} Q-learning will observe that the right action from $A$ always leads to a return of $0$, while the left action leads to random rewards averaging $-0.1$. Over time, the updates will favor the right action, as it consistently provides a higher expected value. However with Q-Learning it would take longer to converge to the optimal policy (than with SARSA), because at the beginning of learning with a big action space there are bound to be state action pairs in state B where the agent received positive rewards early on. With Q-Learning the maximum Q-Value at state B is considered for the Q-Value for the state action pair A und going left, and thus for the agent to converge to the optimal policy it would need all Q-Values in State B to be less than 0, and with a large action space in State B this could take a long time.
  
 
 \section{Hands-on the Gridworld}
@@ -49,7 +55,7 @@ Changed code is updated in \texttt{agent.py} and \texttt{gridworld.py} files.
 
 \subsection{Q-Learning}
 
-\subsubsection*{a)} After training the agent for 100 episodes on the \texttt{MazeGrid}, the average return from the start state was only about 0.147, and the value estimates on the grid were less smooth and generally lower than the optimal values shown in the figure.
+    \subsubsection*{a)} After training the agent for 100 episodes on the \texttt{MazeGrid}, the average return from the start state was only about 0.147, and the value estimates on the grid were less smooth and generally lower than the optimal values shown in the figure.
 
 \vspace{0.1in}
 
@@ -66,4 +72,6 @@ Changed code is updated in \texttt{agent.py} and \texttt{gridworld.py} files.
 This happens because Q-learning relies on exploration and the states around the bridge contain large negative penalties. During early exploration the agent quickly experiences poor returns when moving in that direction. It then learns to avoid the bridge entirely and exploits safer actions instead of discovering the optimal path. On the other hand, value iteration considers every possible action in every state and therefore always converges to the optimal policy.  Even running for a lot of episodes and higher value of epsilon, the agent still avoids the path on the right and chooses the safe action.
 
 \subsubsection*{c)}
+\noindent
+The reason the value is higher than the expected return because of the off-policy nature of the Q-Learning algorithm. If we were to use SARSA, the expected return at start state would match with the value of that start state, but with Q-Learning the q-values are set optimistically. What that means is that the agent would update its q-values based on the greedy / current best action taken even if it falls off the cliff due to a random action being selected as the behavior policy is epsilon greedy.
 \end{document}
