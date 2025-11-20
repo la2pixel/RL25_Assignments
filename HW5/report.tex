@@ -35,13 +35,7 @@ Kevin Van Le (7314700) \\
 
 \subsection*{a)} Q-learning is considered an off-policy control method because, when updating the Q-value for a given state-action pair it does not use the action taken by the current policy. Instead, it updates based on the maximum possible future reward in the next state across all actions, effectively learning about the optimal policy regardless of the policy being followed during exploration.
 
-\subsection*{b)} No, Q-learning and SARSA are not the same even with greedy action selection. Q-learning is off-policy and always updates using the maximum Q-value for the next state, while SARSA updates based on the actual action taken. They can still make different updates, especially if there are ties in Q-values and the tie breaking is random.
-
-\noindent----------------------------------------------------------------------------
-
-\vspace{0.5em}
-\noindent
-In SARSA the behavior and target policy are identical. In Q-Learning the values are updated using the target policy which is greedy while the the behavior policy is used to interact with the environment. If the agents action selection (interaction with the environment) is greedy, then behavior and target policy are also identical. Therefore, SARSA and  Q-learning would be identical in this case.
+\subsection*{b)} In SARSA the behavior and target policy are identical. In Q-Learning the values are updated using the target policy which is greedy while the the behavior policy is used to interact with the environment. If the agents action selection (interaction with the environment) is greedy, then behavior and target policy are also identical. Therefore, SARSA and  Q-learning would be identical in this case.
 
 \subsection*{c)}
 
