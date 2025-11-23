@@ -1,0 +1,81 @@
+\documentclass[11pt]{article}
+
+\usepackage{amsmath,amssymb}
+\usepackage{float}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage[margin=1in]{geometry}
+
+% Define the invert color command
+\newcommand{\invertcolor}{%
+    \pagecolor{black}% Set background to black
+    \color{white}% Set text color to white
+}
+% \invertcolor
+
+\title{Reinforcement Learning HW 6}
+\author{
+Mert Bilgin (7034879) \\
+\url{mert.bilgin@student.uni-tuebingen.de}
+\and
+Lalitha Sivakumar (6300674) \\
+\url{lalitha.sivakumar@student.uni-tuebingen.de}
+\and
+Kevin Van Le (7314700) \\
+\url{kevin-van.le@student.uni-tuebingen.de}
+}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Function approximation}
+
+\subsection*{(a)} Tabular methods are a special case of linear function approximation. For a finite state space with $n$ states, each state $s$ is represented by a one-hot
+feature vector $\phi(s) \in \mathbb{R}^n$ defined by
+\[
+    \phi(s)_i = 
+    \begin{cases}
+        1, & \text{if } i \text{ corresponds to state } s, \\
+        0, & \text{otherwise}.
+    \end{cases}
+\]
+
+With linear value function approximation,
+\[
+    \hat{V}(s) = w^\top \phi(s),
+\]
+the one-hot structure ensures that $\hat{V}(s)$ simply selects the parameter $w_s$. Thus tabular methods are exactly linear function approximators with one-hot features.
+
+\bigskip
+
+\subsection*{(b)} For a continuous state $s = (s_1,\dots,s_k) \in \mathbb{R}^k$, an order-$n$ polynomial feature has the form
+\[
+    x_i(s) = \prod_{j=1}^k s_j^{c_{i,j}},
+\]
+where each exponent $c_{i,j}$ is an integer in $\{0,1,\dots,n\}$.  
+
+\noindent Each dimension $j$ therefore has $(n+1)$ possible exponent choices, and the choices across the $k$ dimensions are independent.  
+Hence the total number of distinct polynomial features is
+\[
+    (n+1)^k.
+\]
+
+\section{Feature Designing}
+A simple feature vector for a linear value function in Super Mario could be
+
+\[
+x(s) = (x_1, x_2, x_3, x_4, x_5),
+\]
+
+where each entry just picks out something important from the current frame:
+
+\begin{itemize}
+    \item $x_1$: Mario's current $x$-position in the level.
+    \item $x_2$: his height (ground, platform, or in the air).
+    \item $x_3$: distance to the closest enemy in front of him.
+    \item $x_4$: whether the next tile is safe to step on (1) or not (0).
+    \item $x_5$: his power-up state (small / super / fire).
+\end{itemize}
+
+\end{document}
