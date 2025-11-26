@@ -2,6 +2,7 @@
 
 \usepackage{amsmath,amssymb}
 \usepackage{float}
+\usepackage{graphicx}
 \usepackage{xcolor}
 \usepackage{hyperref}
 \usepackage[margin=1in]{geometry}
@@ -77,5 +78,53 @@ where each entry just picks out something important from the current frame:
     \item $x_4$: whether the next tile is safe to step on (1) or not (0).
     \item $x_5$: his power-up state (small / super / fire).
 \end{itemize}
+
+\section{Value Function Fitting}
+
+\subsection*{(a)}
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.9\textwidth]{6_gym_valueapprox/trajectory.png}
+    \caption{Trajectory of the pendulum system.}
+    \label{fig:trajectory}
+\end{figure}
+
+\subsection*{(b)}
+Figure~\ref{fig:learning_curve} shows the learning progress over 2000 iterations with $\gamma=0.95$. The loss decreases initially but becomes noisier and starts to converge around the 1300th iteration.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.7\textwidth]{6_gym_valueapprox/learning_curve_gamma095.png}
+    \caption{Learning curve for $\gamma=0.95$ (log scale).}
+    \label{fig:learning_curve}
+\end{figure}
+
+\subsection*{(c)}
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.9\textwidth]{6_gym_valueapprox/value_comparison.png}
+    \caption{Value function before and after learning.}
+    \label{fig:value_comparison}
+\end{figure}
+
+\subsection*{(d)}
+The value function has its maximum near the upright position ($\theta \approx 0$) with low angular velocity. This makes sense because states close to the upright position with low velocity are easy to keep stable and get higher returns. States far from upright or with high velocity need more control effort and get more negative rewards, so they have lower values. The value function is symmetric around $\theta = 0$ because of the symmetric pendulum dynamics.
+
+\subsection*{(e)}
+Figure~\ref{fig:learning_comparison} compares the learning curves for $\gamma=0.95$ and $\gamma=0.5$. The $\gamma=0.5$ case converges to much lower loss values, likely because the TD targets have lower variance due to immediate rewards being weighted a lot more, so therefore the value function is easier to approximate. The value functions look very different (Figure~\ref{fig:gamma_comparison}). With $\gamma=0.5$, the agent cares much more about near-term rewards, so the values don't diverge due to less accumulation of good / bad future rewards.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.7\textwidth]{6_gym_valueapprox/learning_curve_comparison.png}
+    \caption{Learning curves for $\gamma=0.95$ and $\gamma=0.5$.}
+    \label{fig:learning_comparison}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.9\textwidth]{6_gym_valueapprox/gamma_comparison.png}
+    \caption{Value functions with $\gamma=0.95$ (left) and $\gamma=0.5$ (right).}
+    \label{fig:gamma_comparison}
+\end{figure}
 
 \end{document}
