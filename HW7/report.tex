@@ -2,6 +2,7 @@
 
 \usepackage{amsmath,amssymb}
 \usepackage{float}
+\usepackage{graphicx}
 \usepackage{xcolor}
 \usepackage{hyperref}
 \usepackage[margin=1in]{geometry}
@@ -59,5 +60,42 @@ Finally, we obtain the gradient of the log policy by dividing the gradient by th
 \nabla_\theta \log \pi_\theta(s,a) = \frac{\nabla_\theta \pi_\theta(s,a)}{\pi_\theta(s,a)} = \frac{\phi(s)^\top \theta - a}{\sigma^2} \phi(s)
 \end{equation}
 
+\section{Deep Q-Learning (Q-Networks)}
+\subsection*{(a)} see Gym-DQN.ipynb
+\subsection*{(b)} see Gym-DQN.ipynb
+
+\subsection*{(c)}
+For the Pendulum task we compare three settings: target update every step (Interval=1), no target network, and target update every 20 steps (Interval=20).
+
+\noindent\includegraphics[width=\textwidth]{pendulum_comparison.png}
+
+\noindent The printed results are:
+
+\begin{verbatim}
+	Pendulum Reward Summary:
+	Interval=1:  Train (last ep)=-1032.6, Test=-147.7+/-83.6
+	No Target:   Train (last ep)=-130.9, Test=-187.5+/-95.9
+	Interval=20: Train (last ep)=-263.1, Test=-643.2+/-1150.5
+\end{verbatim}
+
+\noindent The rewards are very noisy and differ a lot between runs. The train rewards indicate the agent with an interval of 20 yields the highest average rewards, but during the evaluation the performance drops a lot. This indicates overfitting.
+
+\subsection*{(d)} see Gym-DQN.ipynb
+
+\subsection*{(e)}
+For the CartPole task we use the same three settings.
+
+\noindent\includegraphics[width=\textwidth]{cartpole_comparison.png}
+
+\noindent The printed results are:
+
+\begin{verbatim}
+	Cartpole Reward Summary:
+	Interval=1:  Train (last ep)=176.0, Test=469.8+/-43.6
+	No Target:   Train (last ep)=115.0, Test=268.0+/-56.4
+	Interval=20: Train (last ep)=270.0, Test=243.9+/-22.5
+\end{verbatim}
+
+\noindent Here all agents learn to solve the task, but the agent with interval=1 gives the highest test reward on average even though again the agent with interval=20 has the highest average train reward, most likely due to overfitting.
 
 \end{document}
