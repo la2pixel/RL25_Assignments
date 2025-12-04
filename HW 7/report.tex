@@ -1,0 +1,63 @@
+\documentclass[11pt]{article}
+
+\usepackage{amsmath,amssymb}
+\usepackage{float}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage[margin=1in]{geometry}
+
+% Define the invert color command
+\newcommand{\invertcolor}{%
+    \pagecolor{black}% Set background to black
+    \color{white}% Set text color to white
+}
+% \invertcolor
+
+\title{Reinforcement Learning HW 7}
+\author{
+Mert Bilgin (7034879) \\
+\url{mert.bilgin@student.uni-tuebingen.de}
+\and
+Lalitha Sivakumar (6300674) \\
+\url{lalitha.sivakumar@student.uni-tuebingen.de}
+\and
+Kevin Van Le (7314700) \\
+\url{kevin-van.le@student.uni-tuebingen.de}
+}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Score Function for Gaussian Policy}
+
+\subsection*{(a)} 
+
+To compute the policy gradient, we use the log-likelihood trick. This relates the gradient of the policy to the gradient of its logarithm:
+
+\begin{equation}
+\nabla_\theta \pi_\theta(s,a) = \pi_\theta(s,a) \cdot \frac{\nabla_\theta \pi_\theta(s,a)}{\pi_\theta(s,a)} = \pi_\theta(s,a) \cdot \nabla_\theta \log \pi_\theta(s,a)
+\end{equation}
+
+
+We now compute the gradient of the policy with respect to $\theta$. Taking the gradient of the Gaussian policy:
+
+\begin{align}
+\nabla_\theta \pi_\theta(s,a) &= \nabla_\theta p(a|s,\theta) \nonumber \\
+&= \frac{1}{\sigma\sqrt{2\pi}} \exp\left(-\frac{(a-\mu(s,\theta))^2}{2\sigma^2}\right) \cdot \left(-\frac{(a-\mu(s,\theta))}{\sigma^2}\right) \cdot \nabla_\theta \mu(s,\theta)
+\end{align}
+
+Since $\nabla_\theta \mu(s,\theta) = \nabla_\theta (\phi(s)^\top \theta) = \phi(s)$, we can simplify:
+
+\begin{equation}
+\nabla_\theta \pi_\theta(s,a) = \frac{1}{\sigma\sqrt{2\pi}} \exp\left(-\frac{(a-\mu(s,\theta))^2}{2\sigma^2}\right) \frac{(\mu(s,\theta) - a)}{\sigma^2} \cdot \phi(s)
+\end{equation}
+
+Finally, we obtain the gradient of the log policy by dividing the gradient by the policy itself:
+
+\begin{equation}
+\nabla_\theta \log \pi_\theta(s,a) = \frac{\nabla_\theta \pi_\theta(s,a)}{\pi_\theta(s,a)} = \frac{\phi(s)^\top \theta - a}{\sigma^2} \phi(s)
+\end{equation}
+
+
+\end{document}
