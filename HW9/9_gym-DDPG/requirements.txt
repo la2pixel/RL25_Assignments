@@ -1,0 +1,15 @@
+matplotlib
+numpy
+# for mac install beforehand: `brew install swig`
+box2d-py
+swig
+pygame
+gymnasium
+tensorboardx
+notebook
+jupyterlab
+ipympl
+# Add this if you need a CPU only version
+# --index-url https://download.pytorch.org/whl/cpu
+# --extra-index-url https://pypi.org/simple
+torch
