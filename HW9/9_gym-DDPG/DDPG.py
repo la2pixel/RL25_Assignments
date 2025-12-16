@@ -215,7 +215,7 @@ class DDPGAgent(object):
             # Update critic
             q_loss_value = self.Q.fit(s, a, target_q)
             
-            # 3. Update actor (policy) using policy gradient
+            # Update actor (policy) using policy gradient
             self.policy.train()
             self.optimizer.zero_grad()
             
@@ -292,7 +292,7 @@ def main():
     timestep = 0
 
     def save_statistics():
-        with open(f"./results/DDPG_{env_name}-eps{eps}-t{train_iter}-l{lr}-s{random_seed}-stat.pkl", 'wb') as f:
+        with open(f"./results/DDPG_{env_name}-eps{eps}-t{train_iter}-l{lr}-s{random_seed}-u{opts.update_every}-stat.pkl", 'wb') as f:
             pickle.dump({"rewards" : rewards, "lengths": lengths, "eps": eps, "train": train_iter,
                          "lr": lr, "update_every": opts.update_every, "losses": losses}, f)
 
@@ -319,7 +319,7 @@ def main():
         # save every 500 episodes
         if i_episode % 500 == 0:
             print("########## Saving a checkpoint... ##########")
-            torch.save(ddpg.state(), f'./results/DDPG_{env_name}_{i_episode}-eps{eps}-t{train_iter}-l{lr}-s{random_seed}.pth')
+            torch.save(ddpg.state(), f'./results/DDPG_{env_name}_{i_episode}-eps{eps}-t{train_iter}-l{lr}-s{random_seed}-u{opts.update_every}.pth')
             save_statistics()
 
         # logging
