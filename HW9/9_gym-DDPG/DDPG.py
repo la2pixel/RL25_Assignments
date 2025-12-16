@@ -24,7 +24,13 @@ class QFunction(Feedforward):
     def __init__(self, observation_dim, action_dim, hidden_sizes=[100,100],
                  learning_rate = 0.0002):
         # TODO: Setup network with right input and output size (using super().__init__)
-
+        super().__init__(
+            input_size=observation_dim + action_dim,
+            hidden_sizes=hidden_sizes,
+            output_size=1,
+            activation_fun=torch.nn.ReLU(),
+            output_activation=None
+        )
         # END
         self.optimizer=torch.optim.Adam(self.parameters(),
                                         lr=learning_rate,
@@ -47,7 +53,8 @@ class QFunction(Feedforward):
 
     def Q_value(self, observations, actions):
         # TODO: implement the forward pass.
-        pass
+        x = torch.cat([observations, actions], dim=1)
+        return self.forward(x)
 
 # Ornstein Uhlbeck noise, Nothing to be done here
 class OUNoise():
@@ -123,7 +130,7 @@ class DDPGAgent(object):
         # and makes sure the derivative goes to zero at the boundaries
         # Use Tanh, which is between -1 and 1 and scale it to [low, high]
         # Hint: use torch.nn.Tanh()(x)
-        output_activation = lambda x: pass
+        output_activation = lambda x: low + (high - low) * (torch.nn.Tanh()(x) + 1) / 2
 
         self.policy = Feedforward(input_size=self._obs_dim,
                                   hidden_sizes= self._config["hidden_sizes_actor"],
@@ -150,7 +157,22 @@ class DDPGAgent(object):
     def act(self, observation, eps=None):
         # TODO: implement this: use self.action_noise() (which provides normal noise with standard variance)
         # Remember to clip the actions to the action space bounds self._action_space.low and self._action_space.high
-
+        if eps is None:
+            eps = self._eps
+        
+        # Convert observation to tensor and get policy action
+        obs_tensor = torch.from_numpy(observation.astype(np.float32)).unsqueeze(0)
+        with torch.no_grad():
+            action = self.policy(obs_tensor).squeeze(0).numpy()
+        
+        # Add noise
+        noise = eps * self.action_noise()
+        action = action + noise
+        
+        # Clip to action space bounds
+        action = np.clip(action, self._action_space.low, self._action_space.high)
+        
+        return action
 
     def store_transition(self, transition):
         self.buffer.add_transition(transition)
@@ -184,7 +206,29 @@ class DDPGAgent(object):
             # TODO: Implement the rest of the algorithm
 
             # assign q_loss_value  and actor_loss to we stored in the statistics
-
+            with torch.no_grad():
+                # Get actions from target policy for next states
+                a_prime = self.policy_target(s_prime)
+                # Compute target Q-values
+                target_q = rew + self._config["discount"] * (1 - done) * self.Q_target.Q_value(s_prime, a_prime)
+            
+            # Update critic
+            q_loss_value = self.Q.fit(s, a, target_q)
+            
+            # 3. Update actor (policy) using policy gradient
+            self.policy.train()
+            self.optimizer.zero_grad()
+            
+            # Get actions from current policy
+            a_pred = self.policy(s)
+            # Compute Q-values for these actions
+            q_values = self.Q.Q_value(s, a_pred)
+            # Policy loss
+            actor_loss = -q_values.mean()
+            
+            # Backward pass for actor
+            actor_loss.backward()
+            self.optimizer.step()
 
             losses.append((q_loss_value , actor_loss.item()))
 
@@ -205,10 +249,10 @@ def main():
     optParser.add_option('-l', '--lr',action='store',  type='float',
                          dest='lr',default=0.0001,
                          help='learning rate for actor/policy (default %default)')
-    optParser.add_option('-m', '--maxepisodes',action='store',  type='float',
+    optParser.add_option('-m', '--maxepisodes',action='store',  type='int',
                          dest='max_episodes',default=2000,
                          help='number of episodes (default %default)')
-    optParser.add_option('-u', '--update',action='store',  type='float',
+    optParser.add_option('-u', '--update',action='store',  type='int',
                          dest='update_every',default=100,
                          help='number of episodes between target network updates (default %default)')
     optParser.add_option('-s', '--seed',action='store',  type='int',
