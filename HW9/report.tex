@@ -1,0 +1,85 @@
+\documentclass[11pt]{article}
+
+\usepackage{amsmath,amssymb}
+\usepackage{float}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage[margin=1in]{geometry}
+
+% Define the invert color command
+\newcommand{\invertcolor}{%
+    \pagecolor{black}% Set background to black
+    \color{white}% Set text color to white
+}
+% \invertcolor
+
+\title{Reinforcement Learning HW 9}
+\author{
+Mert Bilgin (7034879) \\
+\url{mert.bilgin@student.uni-tuebingen.de}
+\and
+Lalitha Sivakumar (6300674) \\
+\url{lalitha.sivakumar@student.uni-tuebingen.de}
+\and
+Kevin Van Le (7314700) \\
+\url{kevin-van.le@student.uni-tuebingen.de}
+}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section {Deep Deterministic Policy Gradient (DDPG)}
+
+\subsection*{(a)} 
+
+The intuition is that the critic should evaluate the current policy of the actor.
+Therefore, the target value is computed using the actor's target network to estimate the action that would be taken in the next state. Using target networks makes this estimate change slowly, which stabilizes the TD update and prevents divergence.
+
+\subsection*{(b)} 
+
+In Deterministic Policy Gradient (DPG), target networks are updated using a \emph{soft update} mechanism, where the target network parameters are slowly moved towards the online network parameters:
+\[
+\theta_{\text{target}} \leftarrow \tau \theta + (1 - \tau)\theta_{\text{target}},
+\quad \tau \ll 1.
+\]
+This gradual update ensures that the target values change smoothly over time. Compared to hard updates that copy parameters abruptly, soft updates reduce sudden shifts in the targets making them more stable and help prevent oscillations/divergence during learning.
+
+
+\subsection*{(c)} 
+During training, noise is added to the actor's actions so that the policy doesn't act in a purely deterministic way. This controlled randomness allows the agent to try out new actions and explore the continuous action space rather than repeatedly exploiting the same behavior.
+As learning progresses and the noise is reduced, the policy naturally shifts toward exploiting the learned actions, balancing exploration and exploitation and improving overall performance.
+
+\subsection*{(d)} 
+
+In DDPG, overestimation happens because the critic learns from its own predictions.
+When the target value is computed, the critic uses a maximization step over noisy value estimates, so random errors tend to push values upwards rather than cancel out.
+With function approximation, these small errors accumulate, causing the critic to systematically overestimate how good actions are, which can mislead the actor during learning.
+
+
+\section{DDPG- Hands On}
+
+\subsection*{(a)} 
+The updated code is in \texttt{DDPG.py}.
+
+\subsection*{(b)} 
+The plots for this task and the subsequent ones can be found in \texttt{ Gym-DDPG-plots.ipynb}.
+
+The episode rewards improve steadily from about -1500, with raw rewards fluctuating around the -500 range after roughly 1000 episodes. The running mean continues to improve and approaches -500 later in training, indicating stable learning.
+
+\subsection*{(c)} 
+We collected 20{,}000 state--action pairs by running 100 episodes with exploration noise strength $0.2$. The mean episode reward was $-357.49 \pm 160.73$ so we can say that the policy is pretty stable under this noise level.
+
+\subsection*{(d)} 
+For update frequency 20, a learning rate of $0.0001$ converges fastest. By fixing this learning rate, we see that updating the target networks every 20 episodes leads to faster learning than
+updating every 100 episodes.
+
+\subsection*{(e)} 
+Results can be found in the notebook.
+
+\subsection*{(f)} 
+
+
+
+\end{document}
