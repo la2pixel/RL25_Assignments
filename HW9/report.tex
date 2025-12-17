@@ -66,19 +66,49 @@ The updated code is in \texttt{DDPG.py}.
 \subsection*{(b)} 
 The plots for this task and the subsequent ones can be found in \texttt{ Gym-DDPG-plots.ipynb}.
 
-The episode rewards improve steadily from about -1500, with raw rewards fluctuating around the -500 range after roughly 1000 episodes. The running mean continues to improve and approaches -500 later in training, indicating stable learning.
+The episode rewards improve steadily from about -1500, with raw rewards fluctuating around the -500 range after roughly 1500 episodes. The running mean continues to improve and approaches -250 later in the training, indicating stable learning.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{output1.png}
+\caption{Pendulum-v1 Experiment}
+\label{fig:exp1}
+\end{figure}
 
 \subsection*{(c)} 
 We collected 20{,}000 state--action pairs by running 100 episodes with exploration noise strength $0.2$. The mean episode reward was $-357.49 \pm 160.73$ so we can say that the policy is pretty stable under this noise level.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{output3.png}
+\caption{Q-function plot}
+\label{fig:exp1}
+\end{figure}
 
 \subsection*{(d)} 
 For update frequency 20, a learning rate of $0.0001$ converges fastest. By fixing this learning rate, we see that updating the target networks every 20 episodes leads to faster learning than
 updating every 100 episodes.
 
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{output2.png}
+\caption{Experiments with varying learning rate and update frequency}
+\label{fig:exp1}
+\end{figure}
+
 \subsection*{(e)} 
 Results can be found in the notebook.
 
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{output4.png}
+\caption{HalfCheetah-v4 Experiment}
+\label{fig:exp1}
+\end{figure}
+
 \subsection*{(f)} 
+
+Yes, the half cheetah runs successfully. However, sometimes it falls and cannot recover the standing position. We got mean reward 3773.03 with maximum 4177.15 reward.
 
 
 
