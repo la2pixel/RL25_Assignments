@@ -1,15 +1,21 @@
 """
-Soft Actor-Critic (SAC) Model for Hockey Environment
+Soft Actor-Critic (SAC) with optional Pink Noise Exploration.
 
-Implements:
-1. Gaussian Actor (policy network)
-2. Twin Critics (Q-networks)
-3. Automatic temperature tuning
+When pink_noise=False (default): Standard SAC with white Gaussian exploration.
+When pink_noise=True: Temporally correlated pink noise replaces iid Gaussian sampling.
 
-Fixed issues:
-- Proper alpha initialization
-- Gradient clipping option
-- Better numerical stability
+Reference: Eberhard et al. (2023) "Pink Noise Is All You Need: Colored Noise
+Exploration in Deep Reinforcement Learning" (ICLR 2023 Spotlight)
+
+The key idea: Standard SAC samples actions from a Gaussian with iid noise at
+each timestep (white noise). This produces jittery, uncorrelated exploration.
+Pink noise (1/f noise, beta=1) is temporally correlated — consecutive samples
+are similar, producing smooth, sustained exploration trajectories. This helps
+discover multi-step action sequences needed for tasks like hitting a puck.
+
+Implementation: We generate pink noise sequences in the frequency domain using
+the Timmer & König (1995) algorithm, pre-buffer them, and use them as the
+noise source for the reparameterization trick instead of iid Gaussian samples.
 """
 
 import torch
@@ -19,220 +25,291 @@ from torch.distributions import Normal
 import numpy as np
 
 
+# ============================================================
+# Pink Noise Generator (Timmer & König 1995)
+# ============================================================
+
+def powerlaw_psd_gaussian(beta, size, fmin=0, rng=None):
+    """
+    Generate Gaussian-distributed noise with a power-law PSD: S(f) = 1/f^beta.
+    
+    beta=0: white noise (no correlation)
+    beta=1: pink noise (1/f, the sweet spot per the paper)
+    beta=2: red/Brownian noise (strong correlation)
+    
+    Based on the algorithm from:
+    Timmer, J. and König, M. (1995) "On generating power law noise"
+    Astronomy and Astrophysics, 300, 707-710
+    
+    Parameters
+    ----------
+    beta : float
+        Exponent of the power law. 1.0 = pink noise.
+    size : tuple or int
+        Shape of output. Last dimension is the time axis.
+    fmin : float
+        Low-frequency cutoff (0 = no cutoff)
+    rng : np.random.Generator
+        Random number generator
+        
+    Returns
+    -------
+    np.ndarray
+        Colored noise samples with unit variance, shape = size
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+    
+    if isinstance(size, int):
+        samples = size
+        shape_prefix = ()
+    else:
+        samples = size[-1]
+        shape_prefix = size[:-1]
+    
+    # Frequencies for rfft
+    f = np.fft.rfftfreq(samples)
+    
+    # Minimum frequency
+    if fmin <= 0:
+        fmin = 1.0 / samples  # default: lowest non-zero frequency
+    
+    # Build the PSD: S(f) = 1/f^beta, but clip at fmin
+    s_scale = np.where(f < fmin, fmin, f)
+    s_scale = s_scale ** (-beta / 2.0)
+    
+    # Generate random complex coefficients
+    dims = shape_prefix + (len(f),)
+    sr = rng.normal(size=dims)
+    si = rng.normal(size=dims)
+    
+    # DC and Nyquist components must be real
+    if samples % 2 == 0:
+        si[..., -1] = 0
+        sr[..., 0] = sr[..., 0] * np.sqrt(2)
+    si[..., 0] = 0
+    
+    # Combine and scale by PSD
+    s = (sr + 1j * si) * s_scale
+    
+    # Inverse FFT to time domain
+    y = np.fft.irfft(s, n=samples, axis=-1)
+    
+    # Normalize to unit variance
+    y_std = y.std(axis=-1, keepdims=True)
+    y_std = np.where(y_std == 0, 1.0, y_std)
+    y = y / y_std
+    
+    return y.astype(np.float32)
+
+
+class ColoredNoiseProcess:
+    """
+    Generates temporally correlated noise for exploration.
+    
+    Pre-generates a buffer of colored noise and steps through it.
+    When the buffer is exhausted, a new one is generated.
+    
+    For SAC: This replaces the iid Gaussian sampling in the
+    reparameterization trick with temporally correlated samples.
+    
+    Parameters
+    ----------
+    beta : float
+        Noise color exponent (1.0 = pink)
+    action_dim : int
+        Dimensionality of noise
+    seq_len : int
+        Buffer length (typically episode length or longer)
+    """
+    
+    def __init__(self, beta, action_dim, seq_len=1000, rng=None):
+        self.beta = beta
+        self.action_dim = action_dim
+        self.seq_len = seq_len
+        self.rng = rng or np.random.default_rng()
+        self.idx = 0
+        self._generate_buffer()
+    
+    def _generate_buffer(self):
+        """Generate a fresh buffer of colored noise."""
+        # Shape: (action_dim, seq_len)
+        self.buffer = powerlaw_psd_gaussian(
+            self.beta, (self.action_dim, self.seq_len), rng=self.rng
+        )
+        self.idx = 0
+    
+    def sample(self):
+        """
+        Get one timestep of colored noise.
+        
+        Returns
+        -------
+        np.ndarray, shape (action_dim,)
+        """
+        if self.idx >= self.seq_len:
+            self._generate_buffer()
+        noise = self.buffer[:, self.idx]
+        self.idx += 1
+        return noise
+    
+    def sample_batch(self, batch_size):
+        """
+        Get a batch of consecutive colored noise samples.
+        
+        Returns
+        -------
+        np.ndarray, shape (batch_size, action_dim)
+        """
+        samples = []
+        for _ in range(batch_size):
+            samples.append(self.sample())
+        return np.stack(samples, axis=0)
+    
+    def reset(self):
+        """Reset the noise process (generate fresh buffer)."""
+        self._generate_buffer()
+
+
+# ============================================================
+# Actor
+# ============================================================
+
 class Actor(nn.Module):
     """
-    Gaussian policy network (actor)
+    Gaussian policy network.
     
-    Outputs mean and log_std for each action dimension
-    Actions are sampled from Gaussian distribution and squashed with tanh
+    When using pink noise, the sample() method can accept external noise
+    instead of sampling from iid Gaussian.
     """
     
     def __init__(self, obs_dim, action_dim, hidden_sizes=[256, 256], 
                  log_std_min=-20, log_std_max=2):
         super(Actor, self).__init__()
-        
         self.log_std_min = log_std_min
         self.log_std_max = log_std_max
         
-        # Build network
         layers = []
         prev_size = obs_dim
-        
         for hidden_size in hidden_sizes:
             layers.append(nn.Linear(prev_size, hidden_size))
             layers.append(nn.ReLU())
             prev_size = hidden_size
         
         self.net = nn.Sequential(*layers)
-        
-        # Output layers for mean and log_std
         self.mean_layer = nn.Linear(prev_size, action_dim)
         self.log_std_layer = nn.Linear(prev_size, action_dim)
-        
-        # Initialize weights
         self._init_weights()
     
     def _init_weights(self):
-        """Initialize network weights"""
         for m in self.modules():
             if isinstance(m, nn.Linear):
                 nn.init.orthogonal_(m.weight, gain=np.sqrt(2))
                 nn.init.constant_(m.bias, 0.0)
-        
-        # Special initialization for output layers
         nn.init.orthogonal_(self.mean_layer.weight, gain=0.01)
         nn.init.orthogonal_(self.log_std_layer.weight, gain=0.01)
         
     def forward(self, obs):
-        """
-        Forward pass
-        
-        Returns
-        -------
-        mean : torch.Tensor
-            Mean of action distribution
-        log_std : torch.Tensor
-            Log standard deviation of action distribution
-        """
         x = self.net(obs)
         mean = self.mean_layer(x)
         log_std = self.log_std_layer(x)
-        
-        # Clamp log_std for numerical stability
         log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
-        
         return mean, log_std
     
-    def sample(self, obs, deterministic=False, with_logprob=True):
+    def sample(self, obs, deterministic=False, with_logprob=True, 
+               external_noise=None):
         """
-        Sample action from policy
+        Sample action from policy.
         
         Parameters
         ----------
         obs : torch.Tensor
-            Observation
         deterministic : bool
-            If True, return mean (no noise)
+            If True, return tanh(mean)
         with_logprob : bool
-            If True, return log probability
-            
-        Returns
-        -------
-        action : torch.Tensor
-            Sampled action (squashed to [-1, 1])
-        log_prob : torch.Tensor or None
-            Log probability of action (None if with_logprob=False)
+            If True, compute log probability
+        external_noise : torch.Tensor, optional
+            Pre-generated noise (e.g. pink noise) to use instead of
+            iid Gaussian. Shape must match (batch, action_dim).
+            Reparameterization: x = mean + std * noise
         """
         mean, log_std = self.forward(obs)
         
         if deterministic:
-            # Deterministic action (for evaluation)
-            action = torch.tanh(mean)
-            return action, None
+            return torch.tanh(mean), None
         
-        # Sample from Gaussian
         std = torch.exp(log_std)
-        normal = Normal(mean, std)
         
-        # Reparameterization trick: x = mean + std * noise
-        x = normal.rsample()  # rsample() enables gradient flow
-        action = torch.tanh(x)  # Squash to [-1, 1]
+        if external_noise is not None:
+            # Pink noise path: use pre-generated correlated noise
+            x = mean + std * external_noise
+        else:
+            # Standard SAC path: iid Gaussian via rsample
+            normal = Normal(mean, std)
+            x = normal.rsample()
+        
+        action = torch.tanh(x)
         
         if with_logprob:
-            # Compute log probability with tanh correction
-            log_prob = normal.log_prob(x)
-            
-            # Correction for tanh squashing (more numerically stable version)
+            # Log prob (same formula regardless of noise source)
+            var = std ** 2
+            log_prob = -0.5 * ((x - mean) ** 2 / var + 2 * log_std + np.log(2 * np.pi))
             log_prob -= torch.log(1 - action.pow(2) + 1e-6)
             log_prob = log_prob.sum(dim=-1, keepdim=True)
-            
             return action, log_prob
-        else:
-            return action, None
+        
+        return action, None
 
+
+# ============================================================
+# Critics
+# ============================================================
 
 class Critic(nn.Module):
-    """
-    Q-network (critic)
-    
-    Takes observation and action as input, outputs Q-value
-    """
-    
     def __init__(self, obs_dim, action_dim, hidden_sizes=[256, 256]):
         super(Critic, self).__init__()
-        
-        # Build network
         layers = []
         prev_size = obs_dim + action_dim
-        
         for hidden_size in hidden_sizes:
             layers.append(nn.Linear(prev_size, hidden_size))
             layers.append(nn.ReLU())
             prev_size = hidden_size
-        
-        # Output Q-value
         layers.append(nn.Linear(prev_size, 1))
-        
         self.net = nn.Sequential(*layers)
-        
-        # Initialize weights
         self._init_weights()
     
     def _init_weights(self):
-        """Initialize network weights"""
         for m in self.modules():
             if isinstance(m, nn.Linear):
                 nn.init.orthogonal_(m.weight, gain=np.sqrt(2))
                 nn.init.constant_(m.bias, 0.0)
         
     def forward(self, obs, action):
-        """
-        Forward pass
-        
-        Parameters
-        ----------
-        obs : torch.Tensor
-            Observation
-        action : torch.Tensor
-            Action
-            
-        Returns
-        -------
-        q_value : torch.Tensor
-            Q-value for (observation, action) pair
-        """
-        # Concatenate observation and action
         x = torch.cat([obs, action], dim=-1)
-        q_value = self.net(x)
-        return q_value
+        return self.net(x)
 
 
 class TwinCritic(nn.Module):
-    """
-    Twin Q-networks
-    
-    Two critics to reduce overestimation bias
-    """
-    
     def __init__(self, obs_dim, action_dim, hidden_sizes=[256, 256]):
         super(TwinCritic, self).__init__()
-        
         self.critic1 = Critic(obs_dim, action_dim, hidden_sizes)
         self.critic2 = Critic(obs_dim, action_dim, hidden_sizes)
         
     def forward(self, obs, action):
-        """
-        Forward pass through both critics
-        
-        Returns
-        -------
-        q1 : torch.Tensor
-            Q-value from critic 1
-        q2 : torch.Tensor
-            Q-value from critic 2
-        """
-        q1 = self.critic1(obs, action)
-        q2 = self.critic2(obs, action)
-        return q1, q2
-    
-    def q1(self, obs, action):
-        """Get Q-value from critic 1 only"""
-        return self.critic1(obs, action)
-    
-    def q2(self, obs, action):
-        """Get Q-value from critic 2 only"""
-        return self.critic2(obs, action)
+        return self.critic1(obs, action), self.critic2(obs, action)
 
+
+# ============================================================
+# SAC Agent
+# ============================================================
 
 class SAC:
     """
-    Soft Actor-Critic Agent
+    SAC agent with optional pink noise exploration.
     
-    Implements SAC with:
-    - Gaussian actor (policy)
-    - Twin critics (Q-functions)
-    - Automatic temperature tuning
-    - Soft target updates
+    Usage:
+        agent = SAC(obs_dim, act_dim, device)                      # vanilla
+        agent = SAC(obs_dim, act_dim, device, pink_noise=True)     # pink noise
     """
     
     def __init__(self,
@@ -248,58 +325,39 @@ class SAC:
                  alpha=0.2,
                  auto_entropy_tuning=True,
                  target_entropy=None,
-                 grad_clip=None):
+                 grad_clip=None,
+                 pink_noise=False,
+                 noise_beta=1.0,
+                 noise_seq_len=1000):
         """
-        Initialize SAC agent
-        
         Parameters
         ----------
-        obs_dim : int
-            Observation dimension
-        action_dim : int
-            Action dimension
-        device : torch.device
-            Device (CPU or GPU)
-        actor_lr : float
-            Actor learning rate
-        critic_lr : float
-            Critic learning rate
-        alpha_lr : float
-            Temperature learning rate
-        hidden_sizes : list
-            Hidden layer sizes
-        gamma : float
-            Discount factor
-        tau : float
-            Soft update coefficient (0.005 = 0.5% update per step)
-        alpha : float
-            Initial temperature
-        auto_entropy_tuning : bool
-            Whether to automatically tune temperature
-        target_entropy : float
-            Target entropy (default: -action_dim)
-        grad_clip : float or None
-            Gradient clipping value (None = no clipping)
+        pink_noise : bool
+            If True, use colored noise for exploration instead of iid Gaussian.
+        noise_beta : float
+            Color exponent. 1.0 = pink (recommended). 0 = white. 2 = red.
+        noise_seq_len : int
+            Length of pre-generated noise buffer.
         """
         self.device = device
         self.gamma = gamma
         self.tau = tau
         self.action_dim = action_dim
         self.grad_clip = grad_clip
+        self.pink_noise = pink_noise
+        self.noise_beta = noise_beta
+        self.noise_seq_len = noise_seq_len
         
-        # Initialize alpha first (before any property access)
         self._alpha = alpha
         self.auto_entropy_tuning = auto_entropy_tuning
         
-        # Create networks
+        # Actor
         self.actor = Actor(obs_dim, action_dim, hidden_sizes).to(device)
+        
+        # Critics + target
         self.critic = TwinCritic(obs_dim, action_dim, hidden_sizes).to(device)
         self.critic_target = TwinCritic(obs_dim, action_dim, hidden_sizes).to(device)
-        
-        # Initialize target networks 
         self.critic_target.load_state_dict(self.critic.state_dict())
-        
-        # Freeze target networks 
         for param in self.critic_target.parameters():
             param.requires_grad = False
         
@@ -307,76 +365,77 @@ class SAC:
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=actor_lr)
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=critic_lr)
         
-        # Automatic entropy tuning
+        # Entropy tuning
         if auto_entropy_tuning:
-            if target_entropy is None:
-                # Default heuristic: -action_dim
-                self.target_entropy = -action_dim
-            else:
-                self.target_entropy = target_entropy
-            
-            self.log_alpha = torch.tensor(np.log(alpha), dtype=torch.float32, 
+            self.target_entropy = target_entropy if target_entropy is not None else -action_dim
+            self.log_alpha = torch.tensor(np.log(alpha), dtype=torch.float32,
                                          requires_grad=True, device=device)
             self.alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=alpha_lr)
+        
+        # Pink noise process for single-env select_action
+        if pink_noise:
+            self._noise_process = ColoredNoiseProcess(
+                noise_beta, action_dim, noise_seq_len
+            )
+        else:
+            self._noise_process = None
     
     @property
     def alpha(self):
-        """Get current temperature"""
         if self.auto_entropy_tuning:
             return self.log_alpha.exp().item()
-        else:
-            return self._alpha
+        return self._alpha
     
     @alpha.setter
     def alpha(self, value):
-        """Set temperature (only when not auto-tuning)"""
         self._alpha = value
     
     def select_action(self, obs, deterministic=False):
-        """
-        Select action
-        
-        Parameters
-        ----------
-        obs : np.array
-            Observation
-        deterministic : bool
-            If True, use mean (for evaluation)
-            
-        Returns
-        -------
-        action : np.array
-            Selected action
-        """
+        """Select action, optionally using pink noise for exploration."""
         with torch.no_grad():
             if isinstance(obs, np.ndarray):
-                if obs.ndim == 1:
-                    obs_tensor = torch.FloatTensor(obs).unsqueeze(0).to(self.device)
-                else:
-                    obs_tensor = torch.FloatTensor(obs).to(self.device)
+                obs_tensor = torch.FloatTensor(obs).to(self.device)
+                if obs_tensor.dim() == 1:
+                    obs_tensor = obs_tensor.unsqueeze(0)
             else:
-                obs_tensor = obs.unsqueeze(0).to(self.device) if obs.dim() == 1 else obs.to(self.device)
+                obs_tensor = obs.to(self.device)
+                if obs_tensor.dim() == 1:
+                    obs_tensor = obs_tensor.unsqueeze(0)
             
-            action_tensor, _ = self.actor.sample(obs_tensor, deterministic=deterministic, with_logprob=False)
+            if deterministic or not self.pink_noise:
+                action_tensor, _ = self.actor.sample(
+                    obs_tensor, deterministic=deterministic, with_logprob=False
+                )
+            else:
+                noise = self._noise_process.sample()
+                noise_tensor = torch.FloatTensor(noise).unsqueeze(0).to(self.device)
+                action_tensor, _ = self.actor.sample(
+                    obs_tensor, deterministic=False, with_logprob=False,
+                    external_noise=noise_tensor
+                )
             
-            action = action_tensor.cpu().numpy().flatten()
-            
-        return action
+            return action_tensor.cpu().numpy().flatten()
+    
+    def reset_noise(self):
+        """Reset pink noise process (call at episode boundaries)."""
+        if self._noise_process is not None:
+            self._noise_process.reset()
     
     def update(self, replay_buffer, batch_size):
         """
-        Update actor, critics, and temperature
+        Standard SAC update (critic, actor, alpha, soft target).
+        
+        NOTE: Updates always use iid Gaussian (standard reparameterization).
+        Pink noise only affects action SELECTION during rollouts.
+        The policy is still a Gaussian — we just sample from it differently
+        when collecting data.
         """
-        # Sample batch
-        obs_batch, act_batch, rew_batch, next_obs_batch, done_batch = replay_buffer.sample(batch_size)
+        obs_batch, act_batch, rew_batch, next_obs_batch, done_batch = \
+            replay_buffer.sample(batch_size)
         
         if isinstance(obs_batch, torch.Tensor):
-
-            obs = obs_batch
-            actions = act_batch
-            next_obs = next_obs_batch
-            rewards = rew_batch
-            dones = done_batch
+            obs, actions, next_obs, rewards, dones = \
+                obs_batch, act_batch, next_obs_batch, rew_batch, done_batch
         else:
             obs = torch.FloatTensor(obs_batch).to(self.device)
             actions = torch.FloatTensor(act_batch).to(self.device)
@@ -384,74 +443,48 @@ class SAC:
             rewards = torch.FloatTensor(rew_batch).unsqueeze(1).to(self.device)
             dones = torch.FloatTensor(done_batch).unsqueeze(1).to(self.device)
         
-        # ================== Update Critics ==================
-        
+        # --- Critic update ---
         with torch.no_grad():
-            # Sample next actions from current policy
             next_actions, next_log_probs = self.actor.sample(next_obs)
-            
-            # Compute target Q-values using target networks
-            q1_next_target, q2_next_target = self.critic_target(next_obs, next_actions)
-            q_next_target = torch.min(q1_next_target, q2_next_target)
-            
-            # Add entropy bonus
-            q_next_target = q_next_target - self.alpha * next_log_probs
-            
-            q_target = rewards + (1 - dones) * self.gamma * q_next_target
+            q1_next, q2_next = self.critic_target(next_obs, next_actions)
+            q_next = torch.min(q1_next, q2_next) - self.alpha * next_log_probs
+            q_target = rewards + (1 - dones) * self.gamma * q_next
         
-        # Get current Q-values
         q1, q2 = self.critic(obs, actions)
+        critic_loss = F.mse_loss(q1, q_target) + F.mse_loss(q2, q_target)
         
-        # Critic losses (MSE)
-        critic1_loss = F.mse_loss(q1, q_target)
-        critic2_loss = F.mse_loss(q2, q_target)
-        critic_loss = critic1_loss + critic2_loss
-        
-        # Update critics
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
-        if self.grad_clip is not None:
+        if self.grad_clip:
             torch.nn.utils.clip_grad_norm_(self.critic.parameters(), self.grad_clip)
         self.critic_optimizer.step()
         
-        # ================== Update Actor ==================
-        
-        # Sample actions from current policy
+        # --- Actor update ---
         new_actions, log_probs = self.actor.sample(obs)
-        
-        # Compute Q-values for new actions
         q1_new, q2_new = self.critic(obs, new_actions)
-        q_new = torch.min(q1_new, q2_new)
-        actor_loss = (self.alpha * log_probs - q_new).mean()
+        actor_loss = (self.alpha * log_probs - torch.min(q1_new, q2_new)).mean()
         
-        # Update actor
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
-        if self.grad_clip is not None:
+        if self.grad_clip:
             torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.grad_clip)
         self.actor_optimizer.step()
         
-        # ================== Update Temperature ==================
-        
+        # --- Alpha update ---
         if self.auto_entropy_tuning:
-            # If entropy < target, increase α to encourage exploration
-            # If entropy > target, decrease α
             alpha_loss = -(self.log_alpha * (log_probs + self.target_entropy).detach()).mean()
-            
             self.alpha_optimizer.zero_grad()
             alpha_loss.backward()
             self.alpha_optimizer.step()
         else:
             alpha_loss = torch.tensor(0.0)
         
-        # ================== Soft Update Target Networks ==================
+        # --- Soft target update ---
+        for tp, sp in zip(self.critic_target.parameters(), self.critic.parameters()):
+            tp.data.copy_(self.tau * sp.data + (1.0 - self.tau) * tp.data)
         
-        self._soft_update(self.critic, self.critic_target)
-        
-        # Return losses for logging
         return {
-            'critic1_loss': critic1_loss.item(),
-            'critic2_loss': critic2_loss.item(),
+            'critic_loss': critic_loss.item(),
             'actor_loss': actor_loss.item(),
             'alpha_loss': alpha_loss.item() if isinstance(alpha_loss, torch.Tensor) else alpha_loss,
             'alpha': self.alpha,
@@ -460,19 +493,7 @@ class SAC:
             'mean_log_prob': log_probs.mean().item(),
         }
     
-    def _soft_update(self, source, target):
-        """
-        Soft update target network
-        
-        target = tau * source + (1-tau) * target
-        """
-        for target_param, source_param in zip(target.parameters(), source.parameters()):
-            target_param.data.copy_(
-                self.tau * source_param.data + (1.0 - self.tau) * target_param.data
-            )
-    
     def save(self, filepath):
-        """Save model"""
         save_dict = {
             'actor': self.actor.state_dict(),
             'critic': self.critic.state_dict(),
@@ -480,19 +501,17 @@ class SAC:
             'actor_optimizer': self.actor_optimizer.state_dict(),
             'critic_optimizer': self.critic_optimizer.state_dict(),
             'auto_entropy_tuning': self.auto_entropy_tuning,
+            'pink_noise': self.pink_noise,
         }
-        
         if self.auto_entropy_tuning:
             save_dict['log_alpha'] = self.log_alpha
             save_dict['alpha_optimizer'] = self.alpha_optimizer.state_dict()
             save_dict['target_entropy'] = self.target_entropy
         else:
             save_dict['alpha'] = self._alpha
-            
         torch.save(save_dict, filepath)
     
     def load(self, filepath):
-        """Load model"""
         checkpoint = torch.load(filepath, map_location=self.device)
         self.actor.load_state_dict(checkpoint['actor'])
         self.critic.load_state_dict(checkpoint['critic'])

@@ -5,13 +5,12 @@ import time
 import os
 import argparse
 import sys
-from collections import deque, defaultdict
+from collections import deque
 from gymnasium.vector import AsyncVectorEnv
 import hockey.hockey_env as h_env
 
-# Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from hockey_sac import SAC
+from hockey_sac import SAC, ColoredNoiseProcess
 from hockey_replay_buffer_parallel import ReplayBuffer
 
 try:
@@ -19,14 +18,115 @@ try:
 except ImportError:
     wandb = None
 
+
+# ============================================================
 # Reward Wrapper
-class DenseRewardHockeyWrapper(gym.Wrapper):
+# ============================================================
+
+class AttackRewardWrapper(gym.Wrapper):
+    """
+    Offensive reward shaping.
+    - Amplified win/loss signal
+    - Closeness bonus (fades after first touch)
+    - Small touch bonus
+    """
+    def __init__(self, env):
+        super().__init__(env)
+        self.touched = False
+
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+        self.touched = False
+        return obs, info
+
+    def step(self, action):
+        obs, reward, done, trunc, info = self.env.step(action)
+
+        closeness = info.get('reward_closeness_to_puck', 0)
+        touch = info.get('reward_touch_puck', 0)
+        winner = info.get('winner', 0)
+
+        if touch > 0:
+            self.touched = True
+
+        win_bonus = 0
+        if done or trunc:
+            if winner == 1:
+                win_bonus = 10
+            elif winner == -1:
+                win_bonus = -10
+
+        closeness_bonus = 3 * closeness if not self.touched else 0.5 * closeness
+        touch_bonus = 0.1 * touch
+
+        shaped = reward + closeness_bonus + touch_bonus + win_bonus
+        return obs, shaped, done, trunc, info
+
+
+class DefenseRewardWrapper(gym.Wrapper):
+    """
+    Defensive reward shaping.
+    - Asymmetric: losing penalized more than winning rewarded
+    - Zone bonus for keeping puck in opponent half
+    - Interception bonus for touching puck in own half
+    - Small closeness bonus to guide early learning
+    
+    Obs layout: obs[12]=puck_x, obs[14]=puck_vx
+    """
+    def __init__(self, env):
+        super().__init__(env)
+        self.touched = False
+
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+        self.touched = False
+        return obs, info
+
+    def step(self, action):
+        obs, reward, done, trunc, info = self.env.step(action)
+
+        closeness = info.get('reward_closeness_to_puck', 0)
+        touch = info.get('reward_touch_puck', 0)
+        winner = info.get('winner', 0)
+
+        if touch > 0:
+            self.touched = True
+
+        # Asymmetric win/loss — losing hurts more than winning helps
+        win_bonus = 0
+        if done or trunc:
+            if winner == 1:
+                win_bonus = 5
+            elif winner == -1:
+                win_bonus = -15
+
+        # Small closeness bonus
+        closeness_bonus = 2 * closeness if not self.touched else 0.3 * closeness
+
+        # Zone bonus: reward when puck is in opponent half (positive x)
+        puck_x = obs[12] if len(obs) > 12 else 0
+        zone_bonus = 0.2 * max(0, puck_x)
+
+        # Interception: touching puck when it's in our half
+        intercept_bonus = 0.5 if (touch > 0 and puck_x < 0) else 0
+
+        shaped = reward + closeness_bonus + win_bonus + zone_bonus + intercept_bonus
+        return obs, shaped, done, trunc, info
+
+
+class ProvenRewardWrapper(gym.Wrapper):
+    """
+    Proven reward shaping from reference implementation.
+    - Strong closeness signal (5x) drives agent toward puck
+    - Idle penalty when not touching (-0.1 per step)
+    - One-time touch bonus proportional to step (rewards fast engagement)
+    """
     def __init__(self, env):
         super().__init__(env)
         self.touched = 0
         self.first_time_touch = 1
         self.step_count = 0
-        
+
     def reset(self, **kwargs):
         obs, info = self.env.reset(**kwargs)
         self.touched = 0
@@ -35,20 +135,31 @@ class DenseRewardHockeyWrapper(gym.Wrapper):
         return obs, info
 
     def step(self, action):
-        self.step_count += 1
         obs, reward, done, trunc, info = self.env.step(action)
-        self.touched = max(self.touched, info.get('reward_touch_puck', 0))
-        dense_reward = (
+        self.step_count += 1
+
+        closeness = info.get('reward_closeness_to_puck', 0)
+        touch = info.get('reward_touch_puck', 0)
+
+        self.touched = max(self.touched, touch)
+
+        shaped = (
             reward
-            + 5 * info.get('reward_closeness_to_puck', 0)
+            + 5 * closeness
             - (1 - self.touched) * 0.1
             + self.touched * self.first_time_touch * 0.1 * self.step_count
         )
-        if self.touched: self.first_time_touch = 0
-        return obs, dense_reward, done, trunc, info
 
-# Env Factory 
-def make_env(opponent_type, rank=0, opponent_model_path=None):
+        self.first_time_touch = 1 - self.touched
+
+        return obs, shaped, done, trunc, info
+
+
+# ============================================================
+# Env Factory
+# ============================================================
+
+def make_env(opponent_type, rank=0, opponent_model_path=None, reward_mode='default'):
     def _thunk():
         raw_env = h_env.HockeyEnv()
         if opponent_type == 'weak':
@@ -73,14 +184,25 @@ def make_env(opponent_type, rank=0, opponent_model_path=None):
 
         original_step_method = raw_env.step
         def step_with_opponent(action):
-            obs_op = raw_env.obs_agent_two() 
+            obs_op = raw_env.obs_agent_two()
             op_action = opponent.act(obs_op)
             return original_step_method(np.hstack([action, op_action]))
         raw_env.step = step_with_opponent
-        return DenseRewardHockeyWrapper(raw_env)
+
+        if reward_mode == 'attack':
+            return AttackRewardWrapper(raw_env)
+        elif reward_mode == 'defense':
+            return DefenseRewardWrapper(raw_env)
+        elif reward_mode == 'proven':
+            return ProvenRewardWrapper(raw_env)
+        return raw_env
     return _thunk
 
-# Evaluation Function 
+
+# ============================================================
+# Evaluation
+# ============================================================
+
 def evaluate(agent, env, num_episodes=5):
     total_reward = 0
     wins = 0
@@ -97,6 +219,11 @@ def evaluate(agent, env, num_episodes=5):
                 wins += 1
     return total_reward / num_episodes, wins / num_episodes
 
+
+# ============================================================
+# Training Loop
+# ============================================================
+
 def train_parallel(args):
     start_time = time.time()
 
@@ -109,34 +236,65 @@ def train_parallel(args):
     else:
         device = torch.device("cpu")
 
-    print(f"Training on {device}")
+    mode_str = "Pink Noise" if args.pink_noise else "Vanilla"
+    reward_str = args.reward_mode.capitalize()
+    opponent_models = args.opponent_models if args.opponent_models else []
+    opp_str = f"{len(opponent_models)} models + weak/strong" if opponent_models else args.opponent
+    print(f"Training on {device} | Mode: {mode_str} | Reward: {reward_str} | Opponents: {opp_str}")
 
+    # Build per-env opponent assignments
+    num_models = len(opponent_models)
     opponent_types = []
-    if args.opponent_model:
-        pattern = ['weak', 'strong', 'model']
-        for i in range(args.num_envs): opponent_types.append(pattern[i % 3])
+    opponent_paths = []
+
+    if num_models > 0:
+        pool = ['weak', 'strong'] + [f'model_{i}' for i in range(num_models)]
+        for i in range(args.num_envs):
+            assignment = pool[i % len(pool)]
+            if assignment == 'weak':
+                opponent_types.append('weak')
+                opponent_paths.append(None)
+            elif assignment == 'strong':
+                opponent_types.append('strong')
+                opponent_paths.append(None)
+            else:
+                model_idx = int(assignment.split('_')[1])
+                opponent_types.append('model')
+                opponent_paths.append(opponent_models[model_idx])
     elif args.opponent == 'mix':
         num_weak = int(args.num_envs * 0.4)
-        for i in range(args.num_envs): opponent_types.append('weak' if i < num_weak else 'strong')
+        for i in range(args.num_envs):
+            opponent_types.append('weak' if i < num_weak else 'strong')
+            opponent_paths.append(None)
     else:
-        opponent_types = [args.opponent] * args.num_envs
+        for i in range(args.num_envs):
+            opponent_types.append(args.opponent)
+            opponent_paths.append(None)
 
     if args.wandb and wandb:
         wandb.init(project="hockey-sac-parallel", config=vars(args))
 
-    envs = AsyncVectorEnv([make_env(op, i, args.opponent_model) for i, op in enumerate(opponent_types)])
-    
-    eval_env_weak = make_env('weak', 900)()
-    eval_env_strong = make_env('strong', 901)()
-    eval_env_model = make_env('model', 902, args.opponent_model)() if args.opponent_model else None
+    envs = AsyncVectorEnv([
+        make_env(op, i, path, reward_mode=args.reward_mode)
+        for i, (op, path) in enumerate(zip(opponent_types, opponent_paths))
+    ])
+
+    # Eval envs: always raw reward
+    eval_env_weak = make_env('weak', 900, reward_mode='default')()
+    eval_env_strong = make_env('strong', 901, reward_mode='default')()
+    eval_env_models = []
+    for j, mp in enumerate(opponent_models):
+        eval_env_models.append(
+            make_env('model', 902 + j, mp, reward_mode='default')()
+        )
 
     dummy_obs = envs.single_observation_space.sample()
     obs_dim = dummy_obs.shape[0]
-    action_dim = envs.single_action_space.shape[0] // 2 
-    
+    action_dim = envs.single_action_space.shape[0] // 2
+
     agent = SAC(
-        obs_dim=obs_dim, 
-        action_dim=action_dim, 
+        obs_dim=obs_dim,
+        action_dim=action_dim,
         device=device,
         hidden_sizes=(args.hidden_size, args.hidden_size),
         actor_lr=args.actor_learning_rate,
@@ -144,7 +302,9 @@ def train_parallel(args):
         alpha_lr=args.alpha_learning_rate,
         tau=args.tau,
         gamma=args.gamma,
-        alpha=args.alpha
+        alpha=args.alpha,
+        pink_noise=args.pink_noise,
+        noise_beta=args.noise_beta,
     )
 
     if args.load_model:
@@ -155,11 +315,19 @@ def train_parallel(args):
             sys.exit(1)
 
     replay_buffer = ReplayBuffer(obs_dim, action_dim, args.buffer_size, device)
-    
+
+    # Create per-env pink noise processes for vectorized exploration
+    env_noise_processes = None
+    if args.pink_noise:
+        env_noise_processes = [
+            ColoredNoiseProcess(args.noise_beta, action_dim, seq_len=500)
+            for _ in range(args.num_envs)
+        ]
+
     obs, _ = envs.reset()
     total_steps = 0
     last_log_step = 0
-    best_eval_metric = -float('inf') # Tracking best mean reward
+    best_eval_metric = -float('inf')
     current_ep_rewards = np.zeros(args.num_envs)
     recent_rewards = deque(maxlen=100)
     os.makedirs(args.save_dir, exist_ok=True)
@@ -172,30 +340,44 @@ def train_parallel(args):
         else:
             with torch.no_grad():
                 obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device)
-                act_t, _ = agent.actor.sample(obs_t)
+
+                if args.pink_noise and env_noise_processes is not None:
+                    # Collect one pink noise sample per env
+                    noise_batch = np.stack(
+                        [proc.sample() for proc in env_noise_processes], axis=0
+                    )
+                    noise_t = torch.as_tensor(noise_batch, dtype=torch.float32, device=device)
+                    act_t, _ = agent.actor.sample(obs_t, external_noise=noise_t)
+                else:
+                    act_t, _ = agent.actor.sample(obs_t)
+
                 actions = act_t.cpu().numpy()
-        
+
         next_obs, rewards, dones, truncs, infos = envs.step(actions)
         current_ep_rewards += rewards
         finished = np.logical_or(dones, truncs)
-        
+
         if finished.any():
             for i, f in enumerate(finished):
                 if f:
                     recent_rewards.append(current_ep_rewards[i])
-                    if args.wandb and wandb: wandb.log({"train/episode_reward": current_ep_rewards[i], "global_step": total_steps})
+                    if args.wandb and wandb:
+                        wandb.log({"train/episode_reward": current_ep_rewards[i], "global_step": total_steps})
                     current_ep_rewards[i] = 0.0
+                    # Reset noise process for this env on episode boundary
+                    if env_noise_processes is not None:
+                        env_noise_processes[i].reset()
 
         real_next = next_obs.copy()
         for i, t in enumerate(truncs):
             if t and "final_observation" in infos: real_next[i] = infos["final_observation"][i]
         for i, d in enumerate(dones):
             if d and "final_observation" in infos: real_next[i] = infos["final_observation"][i]
-            
+
         replay_buffer.add_batch(obs, actions, rewards, real_next, finished)
         obs = next_obs
         total_steps += args.num_envs
-        
+
         if total_steps >= args.learning_starts:
             updates = int(args.num_envs * args.update_ratio)
             for _ in range(updates):
@@ -208,23 +390,43 @@ def train_parallel(args):
             print(f"{total_steps:8d} | {sps:5d} | {avg_rew:10.2f} | {best_eval_metric:10.2f}")
 
         if total_steps % args.eval_freq < args.num_envs and total_steps >= args.learning_starts:
-            if args.opponent_model:
-                r_w, w_w = evaluate(agent, eval_env_weak, 33)
-                r_s, w_s = evaluate(agent, eval_env_strong, 33)
-                r_m, w_m = evaluate(agent, eval_env_model, 34)
-                
-                avg_winrate = (w_w + w_s + w_m) / 3.0
-                avg_reward = (r_w + r_s + r_m) / 3.0
-                
+            num_model_envs = len(eval_env_models)
+
+            if num_model_envs > 0:
+                total_eval = 100
+                per_builtin = total_eval // (2 + num_model_envs)
+                leftover = total_eval - per_builtin * (2 + num_model_envs)
+
+                r_w, w_w = evaluate(agent, eval_env_weak, per_builtin)
+                r_s, w_s = evaluate(agent, eval_env_strong, per_builtin)
+
+                model_rewards = []
+                model_winrates = []
+                for j, ev in enumerate(eval_env_models):
+                    eps = per_builtin + (1 if j < leftover else 0)
+                    r_m, w_m = evaluate(agent, ev, eps)
+                    model_rewards.append(r_m)
+                    model_winrates.append(w_m)
+                    if args.wandb and wandb:
+                        wandb.log({
+                            f"eval/win_rate_model_{j}": w_m,
+                            f"eval/reward_model_{j}": r_m,
+                        }, commit=False)
+
+                all_rewards = [r_w, r_s] + model_rewards
+                all_winrates = [w_w, w_s] + model_winrates
+                avg_winrate = np.mean(all_winrates)
+                avg_reward = np.mean(all_rewards)
+
                 if args.wandb and wandb:
                     wandb.log({
-                        "eval/win_rate_weak": w_w, "eval/win_rate_strong": w_s, "eval/win_rate_model": w_m,
-                        "eval/reward_weak": r_w, "eval/reward_strong": r_s, "eval/reward_model": r_m,
+                        "eval/win_rate_weak": w_w, "eval/win_rate_strong": w_s,
+                        "eval/reward_weak": r_w, "eval/reward_strong": r_s,
                     }, commit=False)
             else:
                 r_w, w_w = evaluate(agent, eval_env_weak, 40)
                 r_s, w_s = evaluate(agent, eval_env_strong, 60)
-                
+
                 avg_winrate = (w_w * 0.40) + (w_s * 0.60)
                 avg_reward = (r_w * 0.40) + (r_s * 0.60)
 
@@ -236,23 +438,28 @@ def train_parallel(args):
 
             if args.wandb and wandb:
                 wandb.log({
-                    "eval/overall_win_rate": avg_winrate, 
-                    "eval/mean_reward": avg_reward,  
+                    "eval/overall_win_rate": avg_winrate,
+                    "eval/mean_reward": avg_reward,
                     "global_step": total_steps
                 })
-            
+
+            print(f"  [EVAL @ {total_steps}] Reward: {avg_reward:.2f} | WinRate: {avg_winrate:.1%} | W:{w_w:.1%} S:{w_s:.1%}" +
+                  (f" M:{' '.join(f'{w:.1%}' for w in model_winrates)}" if num_model_envs > 0 else ""))
+
             if avg_reward > best_eval_metric:
                 best_eval_metric = avg_reward
                 agent.save(os.path.join(args.save_dir, "sac_hockey_best.pth"))
-                print(f"NEW BEST MODEL! Reward: {avg_reward:.2f}")
+                print(f"  >>> NEW BEST MODEL! <<<")
 
             agent.save(os.path.join(args.save_dir, "sac_hockey_latest.pth"))
 
     envs.close()
     eval_env_weak.close()
     eval_env_strong.close()
-    if eval_env_model: eval_env_model.close()
+    for ev in eval_env_models:
+        ev.close()
     agent.save(os.path.join(args.save_dir, "sac_hockey_final.pth"))
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -265,8 +472,8 @@ if __name__ == "__main__":
     parser.add_argument('--log_freq', type=int, default=5000)
     parser.add_argument('--eval_freq', type=int, default=20000)
     parser.add_argument('--device', type=str, default=None)
-    
-    # Sweep Params
+
+    # Hyperparameters
     parser.add_argument('--alpha_learning_rate', type=float, default=0.0003)
     parser.add_argument('--actor_learning_rate', type=float, default=0.0003)
     parser.add_argument('--critic_learning_rate', type=float, default=0.0003)
@@ -275,11 +482,22 @@ if __name__ == "__main__":
     parser.add_argument('--alpha', type=float, default=0.2)
     parser.add_argument('--hidden_size', type=int, default=512)
 
+    # Opponents
     parser.add_argument('--opponent', type=str, default='mix')
-    parser.add_argument('--opponent_model', type=str, default=None)
+    parser.add_argument('--opponent_models', type=str, nargs='+', default=None,
+                        help='Paths to opponent model checkpoints (can pass multiple)')
     parser.add_argument('--save_dir', type=str, default='checkpoints')
     parser.add_argument('--wandb', action='store_true')
     parser.add_argument('--load_model', type=str, default=None)
-    
+
+    # Experiment flags
+    parser.add_argument('--pink_noise', action='store_true',
+                        help='Use pink noise exploration (Eberhard et al. 2023)')
+    parser.add_argument('--noise_beta', type=float, default=1.0,
+                        help='Noise color exponent (1.0=pink, 0=white, 2=red)')
+    parser.add_argument('--reward_mode', type=str, default='default',
+                        choices=['default', 'attack', 'defense', 'proven'],
+                        help='Reward shaping: default (raw), attack (offensive), defense (defensive), proven (reference)')
+
     args = parser.parse_args()
     train_parallel(args)
