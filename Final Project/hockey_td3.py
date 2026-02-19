@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-import random
 
 
 class Actor(nn.Module):
@@ -39,13 +38,11 @@ class TD3Agent:
         self,
         state_dim,
         action_dim,
-        buffer_size=100000,
         gamma=0.99,
         polyak=0.995,
         policy_lr=3e-4,
         critic_lr=3e-4,
-        batch_size=256,
-        act_noise_std = 0.1,
+        act_noise_std=0.1,
         policy_noise=0.2,
         noise_clip=0.5,
         policy_delay=2,
@@ -85,81 +82,55 @@ class TD3Agent:
         self.policy_noise = policy_noise
         self.noise_clip = noise_clip
         self.policy_delay = policy_delay
-        self.buffer_size = buffer_size
-        self.buffer = []
-        self.batch_size = batch_size
 
         # tracking
         self.total_updates = 0
 
         print(f"using device: {self.device}")
 
-    def store_in_buffer(self, observations, action, reward, next_observation, done):
-        self.buffer.append((observations, action, reward, next_observation, done))
-        if len(self.buffer) > self.buffer_size:
-            self.buffer.pop(0)
-
-    def sample_from_buffer(self, batch_size):
-        # randomly sample from replay buffer
-        batch = random.sample(self.buffer, batch_size)
-
-        observations = []
-        actions = []
-        rewards = []
-        next_observations = []
-        dones = []
-
-        # convert batch into lists of observations, actions, rewards, next_observations, dones
-        for observation, action, reward, next_observation, done in batch:
-            observations.append(observation)
-            actions.append(action)
-            rewards.append(reward)
-            next_observations.append(next_observation)
-            dones.append(done)
-
-        # convert to numpy array for speed
-        observations = np.array(observations)
-        actions = np.array(actions)
-        rewards = np.array(rewards)
-        next_observations = np.array(next_observations)
-        dones = np.array(dones)
-
-        # convert the numpy arrays into tensors for training; shape: (batch_size, ELEMENT_DIMENSION)
-        observations = torch.FloatTensor(observations).to(self.device)
-        actions = torch.FloatTensor(actions).to(self.device)
-        rewards = torch.FloatTensor(rewards).reshape(-1, 1).to(self.device)
-        next_observations = torch.FloatTensor(next_observations).to(self.device)
-        dones = torch.FloatTensor(dones).reshape(-1, 1).to(self.device)
-
-        return observations, actions, rewards, next_observations, dones
-
-    # AI Usage
+    # soft update of target network: blend target with main network using polyak
     def polyak_update(self, main_network, target_network):
         for main_param, target_param in zip(main_network.parameters(), target_network.parameters()):
             target_param.data.copy_(
                 self.polyak * target_param.data + (1 - self.polyak) * main_param.data
             )
 
-    def select_action(self, state, add_noise=True):
-        state = torch.FloatTensor(state.reshape(1, -1)).to(self.device)
-        action = self.actor(state).cpu().detach().numpy().flatten()
+    def select_action(self, state, add_noise=True, deterministic=None):
+        if deterministic is not None:
+            add_noise = not deterministic
 
+        # ensure we have a batch dimension: (state_dim,) -> (1, state_dim), (batch, state_dim) stays (batch, state_dim)
+        state_np = np.asarray(state, dtype=np.float32)
+        if state_np.ndim == 1:
+            state_batch = state_np.reshape(1, -1)
+            single_input = True
+        else:
+            state_batch = state_np
+            single_input = False
+
+        state_tensor = torch.FloatTensor(state_batch).to(self.device)
+        action = self.actor(state_tensor).cpu().detach().numpy()
+
+        # add exploration noise per action dimension (same for each row in the batch)
         if add_noise:
-            noise = np.random.normal(0, self.act_noise_std, size=action.shape[0])
+            noise = np.random.normal(0, self.act_noise_std, size=action.shape)
             action = action + noise
-            action = np.clip(action, -1, 1)  # make sure not to go over the valid range of action values [-1, 1]
+            action = np.clip(action, -1, 1)
 
+        # return same shape as expected: 1D for single obs, 2D for batch
+        if single_input:
+            return action.flatten()
         return action
 
-    def train(self):
+    def update(self, replay_buffer, batch_size):
+        if len(replay_buffer) < batch_size:
+            return
+        observations, actions, rewards, next_observations, dones = replay_buffer.sample(batch_size)
         self.total_updates += 1
-
-        # sampling transitions from the replay buffer
-        observations, actions, rewards, next_observations, dones = self.sample_from_buffer(self.batch_size)
 
         # computing target Q-Values
         with torch.no_grad():
-            # target policy smoothing to reduce exploitation in Q-Value errors (AI usage)
+            # target policy smoothing to reduce exploitation in Q-Value errors
             noise = (torch.randn_like(actions) * self.policy_noise).clamp(-self.noise_clip, self.noise_clip)
             next_actions = (self.actor_target(next_observations) + noise).clamp(-1, 1)
 
