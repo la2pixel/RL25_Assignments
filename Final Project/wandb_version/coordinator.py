@@ -71,18 +71,30 @@ def main():
             print(f"Resuming: last trigger was round {trigger_round}, all keys finished → starting at round {start_round}.")
     else:
         start_round = trigger_round + 1
-        print(f"Resuming: round {trigger_round} in progress ({len(finished)}/{len(pool_keys)} finished). Waiting for round {trigger_round} to complete...")
+        print(f"Resuming: round {trigger_round} in progress ({len(finished)}/{len(pool_keys)} finished). Assigning keys to workers and waiting for round {trigger_round} to complete...")
         deadline = time.time() + timeout_hours * 3600
         while time.time() < deadline:
             try:
+                # Process key requests so workers get assigned while we wait (same as main round loop)
+                requests = pool.read_key_requests_merged(entity, project, trigger_round)
+                assignments = pool.read_key_assignments(entity, project, trigger_round)
+                n_before = len(assignments)
                 finished = pool.read_finished_pool_keys_merged(entity, project, trigger_round)
+                assigned_keys = set(assignments.values())
+                available = [k for k in pool_keys if k not in finished and k not in assigned_keys]
+                for wid in set(requests):
+                    if wid in assignments:
+                        continue
+                    if not available:
+                        break
+                    assignments[wid] = available.pop(0)
+                if len(assignments) > n_before:
+                    pool.write_key_assignments(entity, project, trigger_round, assignments)
+                if len(finished) >= len(pool_keys):
+                    print(f"Round {trigger_round} complete. Starting from round {start_round}.")
+                    break
             except Exception as e:
-                print(f"Error reading finished pool keys: {e}")
-                time.sleep(args.poll_interval)
-                continue
-            if len(finished) >= len(pool_keys):
-                print(f"Round {trigger_round} complete. Starting from round {start_round}.")
-                break
+                print(f"Error: {e}")
             time.sleep(poll_interval)
         else:
             print(f"Round {trigger_round} timed out. Exiting.")

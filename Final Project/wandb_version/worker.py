@@ -6,6 +6,7 @@ One key per round per worker; exits when coordinator writes round=0 and no pool_
 
 import argparse
 import os
+import random
 import subprocess
 import sys
 import time
