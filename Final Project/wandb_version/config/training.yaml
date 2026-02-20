@@ -4,18 +4,18 @@
 # Algo: td3 | sac
 # Reward modes: default | attack | defense | proven
 
-project: testy
+project: hockey-training
 entity: meloneneis   # required: your wandb username (same on all machines)
 builtin_opponents: [weak, strong]
 
 coordinator:
   max_rounds: 100
-  poll_interval: 120
+  poll_interval: 30
   timeout_hours: 24
   assignment_timeout_hours: 2   # free pool key if worker assigned but not finished for this long (crash recovery)
 
 worker:
-  poll_interval: 60
+  poll_interval: 30
 
 # Global training params (apply to all specs unless overridden per-spec)
 training:
