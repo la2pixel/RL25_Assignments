@@ -46,6 +46,7 @@ def main():
     max_rounds = coord.get("max_rounds", 50)
     poll_interval = coord.get("poll_interval", 120)
     timeout_hours = coord.get("timeout_hours", 24)
+    assignment_timeout_hours = coord.get("assignment_timeout_hours", 2)
     builtin_cfg = cfg.get("builtin_opponents")
     if isinstance(builtin_cfg, list):
         builtin_opponents = [str(x).strip() for x in builtin_cfg if x]
@@ -91,10 +92,20 @@ def main():
                 requests = pool.read_key_requests_merged(entity, project, trigger_round)
                 assignments = pool.read_key_assignments(entity, project, trigger_round)
                 timestamps = pool.read_assignment_timestamps(entity, project, trigger_round)
+                registry = pool.read_worker_run_registry(entity, project, trigger_round)
                 finished = pool.read_finished_pool_keys_merged(entity, project, trigger_round)
                 now = time.time()
                 timeout_sec = assignment_timeout_hours * 3600
-                stale = [wid for wid, pk in list(assignments.items()) if pk not in finished and (now - timestamps.get(wid, 0)) > timeout_sec]
+                stale = []
+                for wid, pk in list(assignments.items()):
+                    if pk in finished:
+                        continue
+                    if wid in registry:
+                        state = pool.get_run_state(registry[wid])
+                        if state is not None and state != "running":
+                            stale.append(wid)
+                    elif wid in timestamps and (now - timestamps[wid]) > timeout_sec:
+                        stale.append(wid)
                 for wid in stale:
                     del assignments[wid]
                     timestamps.pop(wid, None)
@@ -157,10 +168,20 @@ def main():
                     requests = pool.read_key_requests_merged(entity, project, round_n)
                     assignments = pool.read_key_assignments(entity, project, round_n)
                     timestamps = pool.read_assignment_timestamps(entity, project, round_n)
+                    registry = pool.read_worker_run_registry(entity, project, round_n)
                     finished = pool.read_finished_pool_keys_merged(entity, project, round_n)
                     now = time.time()
                     timeout_sec = assignment_timeout_hours * 3600
-                    stale = [wid for wid, pk in list(assignments.items()) if pk not in finished and wid in timestamps and (now - timestamps[wid]) > timeout_sec]
+                    stale = []
+                    for wid, pk in list(assignments.items()):
+                        if pk in finished:
+                            continue
+                        if wid in registry:
+                            state = pool.get_run_state(registry[wid])
+                            if state is not None and state != "running":
+                                stale.append(wid)
+                        elif wid in timestamps and (now - timestamps[wid]) > timeout_sec:
+                            stale.append(wid)
                     for wid in stale:
                         del assignments[wid]
                         timestamps.pop(wid, None)

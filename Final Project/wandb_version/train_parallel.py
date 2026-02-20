@@ -264,6 +264,10 @@ def train_parallel(args):
         if round_based and pool_key:
             config["pool_key"] = pool_key
         wandb.init(project=project, entity=getattr(args, 'entity', None), name=run_name, config=config, tags=tags)
+        # Register this run so coordinator can check run state (running/crashed/finished) for crash recovery
+        if round_based and pool_key and pool is not None and getattr(args, 'worker_id', None) and getattr(args, 'round', None):
+            run_path = getattr(wandb.run, 'path', None) or f"{getattr(args, 'entity', '')}/{project}/{wandb.run.id}"
+            pool.register_worker_run(getattr(args, 'entity', None), project, getattr(args, 'round', 0), args.worker_id, run_path)
 
     envs = AsyncVectorEnv([
         make_env(op, i, path, reward_mode=args.reward_mode, opponent_algo=algo)
@@ -517,6 +521,7 @@ if __name__ == "__main__":
     # Config-based: load hyperparams and algo/reward_mode from YAML (used by worker)
     parser.add_argument('--config', type=str, default=None, help='Path to training config YAML (with --pool_key loads full args for that spec)')
     parser.add_argument('--pool_key', type=str, default=None, help='Pool key (e.g. td3-default); with --config loads spec from config')
+    parser.add_argument('--worker_id', type=str, default=None, help='Worker id (set by worker.py) for coordinator to check wandb run status')
 
     args = parser.parse_args()
     if getattr(args, 'config', None) and getattr(args, 'pool_key', None):

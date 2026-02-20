@@ -362,6 +362,71 @@ def write_assignment_timestamps(entity, project, round_n, timestamps):
     run.log_artifact(art, aliases=["latest"])
 
 
+def _worker_run_registry_artifact_name(round_n):
+    return f"round-worker-runs-{round_n}"
+
+
+def read_worker_run_registry(entity, project, round_n):
+    """Return dict {worker_id: run_path} by merging all versions of round-worker-runs-{n}.
+    Coordinator uses this to check wandb run state (running/crashed/finished) for crash recovery."""
+    api = _api(entity, project)
+    art_name = _worker_run_registry_artifact_name(round_n)
+    merged = {}
+    try:
+        for art in api.artifacts(type_name="config", name=f"{entity}/{project}/{art_name}", per_page=50):
+            d = {}
+            if hasattr(art, "metadata") and art.metadata and "registry" in art.metadata:
+                d = dict(art.metadata["registry"])
+            else:
+                try:
+                    root = art.download()
+                    path = os.path.join(root, "registry.json")
+                    if os.path.isfile(path):
+                        with open(path) as f:
+                            d = json.load(f)
+                except Exception:
+                    pass
+            for k, v in d.items():
+                merged[k] = v
+    except Exception:
+        pass
+    return merged
+
+
+def register_worker_run(entity, project, round_n, worker_id, run_path):
+    """Training run calls this after wandb.init(): register worker_id -> run_path so coordinator can check run state."""
+    import wandb
+    merged = read_worker_run_registry(entity, project, round_n)
+    merged[worker_id] = run_path
+    run = wandb.run
+    if run is None:
+        run = wandb.init(project=project, entity=entity, job_type="worker")
+    art = wandb.Artifact(_worker_run_registry_artifact_name(round_n), type="config")
+    art.metadata["registry"] = dict(merged)
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        json.dump(merged, f)
+        f.flush()
+        art.add_file(f.name, "registry.json")
+    try:
+        os.unlink(f.name)
+    except Exception:
+        pass
+    run.log_artifact(art, aliases=["latest"])
+
+
+def get_run_state(run_path):
+    """Return run state string ('running', 'finished', 'crashed', 'killed', etc.) or None if unavailable."""
+    if not run_path:
+        return None
+    try:
+        api = _api(None, None)
+        # run_path is entity/project/run_id
+        run = api.run(run_path)
+        return getattr(run, "state", None)
+    except Exception:
+        return None
+
+
 def get_assigned_pool_key(entity, project, round_n, worker_id):
     """Return the pool_key assigned to this worker_id for this round, or None if not yet assigned."""
     return read_key_assignments(entity, project, round_n).get(worker_id)

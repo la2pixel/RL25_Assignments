@@ -116,6 +116,7 @@ def main():
             "--entity", args.entity,
             "--wandb_project", args.project,
             "--builtin_opponents", ",".join(builtin_opponents),
+            "--worker_id", worker_id,
         ]
         ret = subprocess.run(cmd, cwd=parent_dir)
         if ret.returncode != 0:
