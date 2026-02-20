@@ -80,6 +80,17 @@ def main():
             time.sleep(args.poll_interval)
             continue
 
+        # Stagger requests so workers don't all request at once (avoids race where coordinator
+        # wasn't ready yet and both workers got the same key).
+        delay = random.uniform(2.0, 15.0)
+        print(f"[Round {current_round}] Staggering key request by {delay:.1f}s to reduce collision.")
+        time.sleep(delay)
+        # Re-check finished count after delay in case round completed
+        finished = pool.read_finished_pool_keys(args.entity, args.project, current_round)
+        if len(finished) >= len(pool_keys):
+            time.sleep(args.poll_interval)
+            continue
+
         # Request a key; coordinator will assign one (sole writer of round-assignments)
         pool.append_key_request(args.entity, args.project, current_round, worker_id)
         pool_key = None

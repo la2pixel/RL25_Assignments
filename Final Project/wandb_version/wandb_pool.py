@@ -320,6 +320,48 @@ def write_key_assignments(entity, project, round_n, assignments):
     run.log_artifact(art, aliases=["latest"])
 
 
+def _round_assignment_timestamps_artifact_name(round_n):
+    return f"round-assignment-timestamps-{round_n}"
+
+
+def read_assignment_timestamps(entity, project, round_n):
+    """Return dict {worker_id: unix_timestamp} for when each worker was assigned. Coordinator uses this to free keys after timeout (crashed workers)."""
+    api = _api(entity, project)
+    try:
+        art = api.artifact(f"{entity}/{project}/{_round_assignment_timestamps_artifact_name(round_n)}:latest")
+        if hasattr(art, "metadata") and art.metadata and "timestamps" in art.metadata:
+            d = art.metadata["timestamps"]
+            return dict(d) if isinstance(d, dict) else {}
+        root = art.download()
+        path = os.path.join(root, "timestamps.json")
+        if os.path.isfile(path):
+            with open(path) as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def write_assignment_timestamps(entity, project, round_n, timestamps):
+    """Coordinator only: write assignment timestamps {worker_id: unix_float} for crash recovery."""
+    import wandb
+    run = wandb.run
+    if run is None:
+        run = wandb.init(project=project, entity=entity, job_type="coordinator")
+    name = _round_assignment_timestamps_artifact_name(round_n)
+    art = wandb.Artifact(name, type="config")
+    art.metadata["timestamps"] = dict(timestamps)
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        json.dump(timestamps, f)
+        f.flush()
+        art.add_file(f.name, "timestamps.json")
+    try:
+        os.unlink(f.name)
+    except Exception:
+        pass
+    run.log_artifact(art, aliases=["latest"])
+
+
 def get_assigned_pool_key(entity, project, round_n, worker_id):
     """Return the pool_key assigned to this worker_id for this round, or None if not yet assigned."""
     return read_key_assignments(entity, project, round_n).get(worker_id)
