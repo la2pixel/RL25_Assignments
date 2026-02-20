@@ -1,0 +1,10 @@
+# Round-based training (coordinator, worker, train_parallel)
+# Install from Final Project root: pip install -r wandb_version/requirements.txt
+# Hockey env (from GitHub): pip install git+https://github.com/martius-lab/hockey-env.git
+
+wandb>=0.15.0
+PyYAML>=6.0
+torch>=2.0.0
+gymnasium>=0.29.0
+numpy>=1.24.0
+git+https://github.com/martius-lab/hockey-env.git
