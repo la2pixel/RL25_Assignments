@@ -1,3 +1,33 @@
 # Python cache files
 __pycache__/
 *.pyc
+*.pyo
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# IDE and local
+.idea/
+*.iml
+.vscode/
+
+# Course / personal (do not push)
+my_notes/
+HW7*
+*.zip
+
+# Env and secrets
+.env
+*.env
+!.env.example
+
+# Final Project: run artifacts and caches (do not push)
+Final Project/wandb/
+Final Project/checkpoints/
+Final Project/pool_cache/
+Final Project/artifacts/
+Final Project/.worker_last_round*
+wandb_version/checkpoints/
+wandb_version/wandb/

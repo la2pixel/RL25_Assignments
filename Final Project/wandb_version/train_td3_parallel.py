@@ -14,6 +14,12 @@ from hockey_td3 import TD3Agent
 from hockey_replay_buffer_parallel import ReplayBuffer
 from hockey_sac import SAC
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import wandb_pool as pool
+except ImportError:
+    pool = None
+
 try:
     import wandb
 except ImportError:
@@ -160,7 +166,7 @@ class ProvenRewardWrapper(gym.Wrapper):
 # Env Factory
 # ============================================================
 
-def make_env(opponent_type, rank=0, opponent_model_path=None, reward_mode='default'):
+def make_env(opponent_type, rank=0, opponent_model_path=None, reward_mode='default', opponent_algo=None):
     def _thunk():
         raw_env = h_env.HockeyEnv()
         if opponent_type == 'weak':
@@ -170,16 +176,28 @@ def make_env(opponent_type, rank=0, opponent_model_path=None, reward_mode='defau
         elif opponent_type == 'model' and opponent_model_path:
             obs_dim = raw_env.observation_space.shape[0]
             action_dim = raw_env.action_space.shape[0] // 2
-            op_agent = SAC(obs_dim, action_dim, device="cpu", hidden_sizes=(512, 512))
-            try:
-                op_agent.load(opponent_model_path)
-            except Exception:
-                opponent = h_env.BasicOpponent(weak=True)
+            if opponent_algo == 'td3':
+                op_agent = TD3Agent(state_dim=obs_dim, action_dim=action_dim)
+                try:
+                    op_agent.load(opponent_model_path)
+                except Exception:
+                    opponent = h_env.BasicOpponent(weak=True)
+                else:
+                    class AgentOpponent:
+                        def __init__(self, agent): self.agent = agent
+                        def act(self, obs): return self.agent.select_action(obs, deterministic=True)
+                    opponent = AgentOpponent(op_agent)
             else:
-                class AgentOpponent:
-                    def __init__(self, agent): self.agent = agent
-                    def act(self, obs): return self.agent.select_action(obs, deterministic=True)
-                opponent = AgentOpponent(op_agent)
+                op_agent = SAC(obs_dim, action_dim, device="cpu", hidden_sizes=(512, 512))
+                try:
+                    op_agent.load(opponent_model_path)
+                except Exception:
+                    opponent = h_env.BasicOpponent(weak=True)
+                else:
+                    class AgentOpponent:
+                        def __init__(self, agent): self.agent = agent
+                        def act(self, obs): return self.agent.select_action(obs, deterministic=True)
+                    opponent = AgentOpponent(op_agent)
         else:
             opponent = h_env.BasicOpponent(weak=True)
 
@@ -237,46 +255,98 @@ def train_parallel(args):
     else:
         device = torch.device("cpu")
 
+    # Round-based mode: download pool from wandb and set opponent_models + algos
+    opponent_algos = []
+    if getattr(args, 'slot', None):
+        if not getattr(args, 'round', None) or not getattr(args, 'entity', None) or not getattr(args, 'specs', None):
+            raise ValueError("When --slot is set, --round, --entity and --specs are required.")
+        if pool is None:
+            raise ValueError("wandb_pool is required for round-based training.")
+        args.wandb = True
+        specs = [s.strip() for s in args.specs.split(",") if s.strip()]
+        pool_entries = pool.download_pool(args.entity, getattr(args, 'wandb_project', 'hockey-rounds'), specs, cache_dir=None)
+        # pool_entries: list of (slot, path, algo) for specs that have an artifact
+        pool_slots = [s for s, _, _ in pool_entries]
+        opponent_models = [p for _, p, _ in pool_entries]
+        opponent_algos = [a for _, _, a in pool_entries]
+        args.opponent_models = opponent_models
+        slot = args.slot
+        round_n = getattr(args, 'round', 0)
+        _b = getattr(args, 'builtin_opponents', 'weak,strong')
+        if isinstance(_b, str):
+            _b = [s.strip() for s in _b.split(",") if s.strip()]
+        args.builtin_opponents = _b if _b else ['weak', 'strong']
+        print(f"[Spec] Slot: {slot} | Round: {round_n} | Reward: {pool.get_reward_mode_for_slot(slot)}")
+        print(f"[Pool] Checking for previous best for this spec... Pool has: {pool_slots if pool_slots else 'none'}")
+        same_spec_in_pool = slot in pool_slots
+        builtin = args.builtin_opponents
+        if not same_spec_in_pool:
+            print(f"[Pool] No previous best for spec '{slot}'. Training from scratch vs builtin ({builtin})" + (f" + other specs ({[s for s in pool_slots]})" if pool_slots else "."))
+        else:
+            others = [s for s in pool_slots if s != slot]
+            print(f"[Pool] Previous best exists for this spec. Training vs builtin ({builtin}) + same-spec (prev best)" + (f" + other specs ({others})" if others else "."))
+    else:
+        pool_slots = []
+        opponent_models = args.opponent_models if args.opponent_models else []
+        opponent_algos = ['sac'] * len(opponent_models) if opponent_models else []
+        _b = getattr(args, 'builtin_opponents', 'weak,strong')
+        if isinstance(_b, str):
+            _b = [s.strip() for s in _b.split(",") if s.strip()]
+        args.builtin_opponents = _b if _b else ['weak', 'strong']
+
+    builtin_opponents = getattr(args, 'builtin_opponents', ['weak', 'strong'])
+    if isinstance(builtin_opponents, str):
+        builtin_opponents = [s.strip() for s in builtin_opponents.split(",") if s.strip()]
+    if not builtin_opponents:
+        builtin_opponents = ['weak', 'strong']
     reward_str = args.reward_mode.capitalize()
-    opponent_models = args.opponent_models if args.opponent_models else []
-    opp_str = f"{len(opponent_models)} models + weak/strong" if opponent_models else args.opponent
-    print(f"Training on {device} | Mode: TD3 | Reward: {reward_str} | Opponents: {opp_str}")
+    num_builtin = len(builtin_opponents)
+    opp_str = f"{len(opponent_models)} pool + {num_builtin} builtin ({','.join(builtin_opponents)})" if getattr(args, 'slot', None) else (f"{len(opponent_models)} models + weak/strong" if opponent_models else getattr(args, 'opponent', 'mix'))
+    print(f"Training on {device} | Mode: TD3 | Reward: {reward_str} | Opponents: {opp_str}" + (f" (={len(opponent_models) + num_builtin} total)" if getattr(args, 'slot', None) else ""))
 
     # Build per-env opponent assignments
     num_models = len(opponent_models)
     opponent_types = []
     opponent_paths = []
+    opponent_algos_per_env = []
 
-    if num_models > 0:
-        pool = ['weak', 'strong'] + [f'model_{i}' for i in range(num_models)]
+    if num_models > 0 or builtin_opponents:
+        pool_list = list(builtin_opponents) + [f'model_{i}' for i in range(num_models)]
         for i in range(args.num_envs):
-            assignment = pool[i % len(pool)]
-            if assignment == 'weak':
-                opponent_types.append('weak')
+            assignment = pool_list[i % len(pool_list)]
+            if assignment in builtin_opponents:
+                opponent_types.append(assignment)
                 opponent_paths.append(None)
-            elif assignment == 'strong':
-                opponent_types.append('strong')
-                opponent_paths.append(None)
+                opponent_algos_per_env.append(None)
             else:
                 model_idx = int(assignment.split('_')[1])
                 opponent_types.append('model')
                 opponent_paths.append(opponent_models[model_idx])
-    elif args.opponent == 'mix':
+                opponent_algos_per_env.append(opponent_algos[model_idx] if model_idx < len(opponent_algos) else 'sac')
+    elif getattr(args, 'opponent', 'mix') == 'mix':
         num_weak = int(args.num_envs * 0.4)
         for i in range(args.num_envs):
             opponent_types.append('weak' if i < num_weak else 'strong')
             opponent_paths.append(None)
+            opponent_algos_per_env.append(None)
     else:
         for i in range(args.num_envs):
             opponent_types.append(args.opponent)
             opponent_paths.append(None)
+            opponent_algos_per_env.append(None)
 
+    project = getattr(args, 'wandb_project', None) or 'hockey-td3-parallel'
     if args.wandb and wandb:
-        wandb.init(project="hockey-td3-parallel", config=vars(args))
+        tags = None
+        run_name = None
+        if getattr(args, 'slot', None) and getattr(args, 'round', None) is not None:
+            tags = [f"round-{args.round}", args.slot]
+            run_name = f"{args.slot}-r{args.round}"
+        wandb.init(project=project, entity=getattr(args, 'entity', None), name=run_name, config=vars(args), tags=tags)
 
     envs = AsyncVectorEnv([
-        make_env(op, i, path, reward_mode=args.reward_mode)
-        for i, (op, path) in enumerate(zip(opponent_types, opponent_paths))
+        make_env(op, i, path, reward_mode=args.reward_mode, opponent_algo=algo)
+        for i, (op, path, algo) in enumerate(zip(opponent_types, opponent_paths, opponent_algos_per_env))
     ])
 
     # Eval envs: always raw reward
@@ -284,8 +354,9 @@ def train_parallel(args):
     eval_env_strong = make_env('strong', 901, reward_mode='default')()
     eval_env_models = []
     for j, mp in enumerate(opponent_models):
+        algo = opponent_algos[j] if j < len(opponent_algos) else 'sac'
         eval_env_models.append(
-            make_env('model', 902 + j, mp, reward_mode='default')()
+            make_env('model', 902 + j, mp, reward_mode='default', opponent_algo=algo)()
         )
 
     dummy_obs = envs.single_observation_space.sample()
@@ -433,7 +504,43 @@ def train_parallel(args):
     eval_env_strong.close()
     for ev in eval_env_models:
         ev.close()
+    best_path = os.path.join(args.save_dir, "td3_hockey_best.pth")
     agent.save(os.path.join(args.save_dir, "td3_hockey_final.pth"))
+
+    # Round-based: head-to-head vs previous best, then upload or mark finished
+    if getattr(args, 'slot', None) and pool is not None and args.wandb and wandb:
+        slot = args.slot
+        entity = getattr(args, 'entity', None)
+        project = getattr(args, 'wandb_project', 'hockey-rounds')
+        if not os.path.isfile(best_path):
+            best_path = os.path.join(args.save_dir, "td3_hockey_final.pth")
+        # Check if previous best exists for this slot
+        try:
+            art = wandb.Api().artifact(f"{entity}/{project}/{slot}-best:best")
+            prev_root = art.download()
+            prev_path = None
+            for f in os.listdir(prev_root):
+                if f.endswith(".pth"):
+                    prev_path = os.path.join(prev_root, f)
+                    break
+        except Exception:
+            prev_path = None
+        if prev_path is None:
+            pool.upload_best(entity, project, slot, best_path)
+            print(f"[Round] No previous best for {slot}; uploaded.")
+        else:
+            # Head-to-head: candidate (our best) vs previous best, 30 games
+            print(f"[1v1] Running 1v1 vs previous best (same spec '{slot}'): 30 games...")
+            eval_env = make_env('model', 0, prev_path, reward_mode='default', opponent_algo='td3' if slot.startswith('td3-') else 'sac')()
+            _, win_rate = evaluate(agent, eval_env, num_episodes=30)
+            eval_env.close()
+            print(f"[1v1] Result vs previous best: win rate {win_rate:.1%} (30 games).")
+            if win_rate > 0.5:
+                pool.upload_best(entity, project, slot, best_path)
+                print(f"[Round] {slot} beat previous best; saved new best and uploaded.")
+            else:
+                pool.mark_slot_finished(entity, project, slot)
+                print(f"[Round] {slot} did not beat previous best; slot marked finished (no upload).")
 
 
 if __name__ == "__main__":
@@ -465,6 +572,13 @@ if __name__ == "__main__":
     parser.add_argument('--save_dir', type=str, default='checkpoints')
     parser.add_argument('--wandb', action='store_true')
     parser.add_argument('--load_model', type=str, default=None)
+    # Round-based training (used by worker)
+    parser.add_argument('--round', type=int, default=None, help='Current round number (required when --slot is set)')
+    parser.add_argument('--slot', type=str, default=None, help='Slot name, e.g. td3-default (required for round-based)')
+    parser.add_argument('--specs', type=str, default=None, help='comma-separated specs for this run (e.g. td3-default,td3-attack). Opponents = N + M builtin.')
+    parser.add_argument('--builtin_opponents', type=str, default='weak,strong', help='comma-separated built-in bots (e.g. weak,strong). Passed by coordinator/worker.')
+    parser.add_argument('--wandb_project', type=str, default='hockey-rounds', help='wandb project for round-based runs')
+    parser.add_argument('--entity', type=str, default=None, help='wandb entity for round-based runs')
 
     # Experiment flags
     parser.add_argument('--reward_mode', type=str, default='default',

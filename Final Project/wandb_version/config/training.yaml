@@ -1,0 +1,76 @@
+# Training config: coordinator and workers use this.
+# Coordinator: pool_keys = keys of "specs"; project/entity/builtin_opponents; and "coordinator" section below.
+# Workers/train_parallel: load "training" + specs[pool_key] for hyperparameters.
+#
+# Algo: td3 | sac
+# Reward modes: default | attack | defense | proven
+
+project: hockey-rounds
+entity: null   # set via env (ENTITY) or CLI --entity
+builtin_opponents: [weak, strong]
+
+# Coordinator-only (CLI flags override these). Round is inferred from wandb trigger + finished-pool on startup.
+coordinator:
+  max_rounds: 5
+  poll_interval: 120
+  timeout_hours: 24
+
+# Global training params (apply to all specs unless overridden per-spec)
+training:
+  total_timesteps: 4000000
+  num_envs: 10
+  batch_size: 256
+  buffer_size: 1000000
+  learning_starts: 10000
+  update_ratio: 0.25
+  log_freq: 500
+  eval_freq: 500
+  device: null
+  save_dir: checkpoints
+  eval_1v1_games: 100
+  # TD3 defaults
+  policy_lr: 3.0e-4
+  critic_lr: 3.0e-4
+  gamma: 0.99
+  polyak: 0.995
+  act_noise_std: 0.1
+  policy_noise: 0.2
+  noise_clip: 0.5
+  policy_delay: 2
+  # SAC defaults (only used if algo: sac)
+  actor_learning_rate: 3.0e-4
+  critic_learning_rate: 3.0e-4
+  alpha_learning_rate: 3.0e-4
+  tau: 0.005
+  alpha: 0.2
+  hidden_size: 512
+  pink_noise: false
+  noise_beta: 1.0
+
+# Per-spec (pool key): algo + reward_mode required; other keys override "training" for that spec.
+# Pool key format: {algo}-{reward_mode} (e.g. td3-default, sac-attack). Add or remove specs as needed.
+specs:
+  td3-default:
+    algo: td3
+    reward_mode: default
+  td3-attack:
+    algo: td3
+    reward_mode: attack
+  td3-proven:
+    algo: td3
+    reward_mode: proven
+  td3-defense:
+    algo: td3
+    reward_mode: defense
+  sac-default:
+    algo: sac
+    reward_mode: default
+  sac-attack:
+    algo: sac
+    reward_mode: attack
+  sac-proven:
+    algo: sac
+    reward_mode: proven
+  sac-defense:
+    algo: sac
+    reward_mode: defense
