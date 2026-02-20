@@ -21,25 +21,10 @@ import wandb_pool as pool
 import config_loader as cl
 
 
-def _resolve_entity(config_entity, cli_entity):
-    # CLI > env > config
-    return cli_entity or os.environ.get("ENTITY") or config_entity or None
-
-
-def _resolve_project(config_project, cli_project):
-    # CLI > env > config > default
-    return cli_project or os.environ.get("WANDB_PROJECT") or config_project or "hockey-rounds"
-
-
 def main():
     default_config = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config", "training.yaml")
-    parser = argparse.ArgumentParser(description="Coordinator: drive rounds using config (pool_keys, project, entity, coordinator section).")
+    parser = argparse.ArgumentParser(description="Coordinator: all settings from config (training.yaml). .env only for WANDB_API_KEY.")
     parser.add_argument("--config", type=str, default=default_config, help=f"Path to training config YAML (default: {default_config})")
-    parser.add_argument("--entity", type=str, default=None, help="wandb entity (overrides config and ENTITY env)")
-    parser.add_argument("--project", type=str, default=None, help="wandb project (overrides config and WANDB_PROJECT env)")
-    parser.add_argument("--max_rounds", type=int, default=None, help="stop after this many rounds (default from config coordinator.max_rounds)")
-    parser.add_argument("--poll_interval", type=int, default=None, help="seconds between checks (default from config coordinator.poll_interval)")
-    parser.add_argument("--timeout_hours", type=float, default=None, help="abort round after this many hours (default from config coordinator.timeout_hours)")
     args = parser.parse_args()
 
     if wandb is None:
@@ -48,18 +33,15 @@ def main():
 
     cfg = cl.load_config(args.config)
     coord = cfg.get("coordinator") or {}
-    if args.max_rounds is None:
-        args.max_rounds = coord.get("max_rounds", 50)
-    if args.poll_interval is None:
-        args.poll_interval = coord.get("poll_interval", 120)
-    if args.timeout_hours is None:
-        args.timeout_hours = coord.get("timeout_hours", 24)
     pool_keys = cl.get_pool_keys_from_config(args.config)
-    project = _resolve_project(cfg.get("project"), args.project)
-    entity = _resolve_entity(cfg.get("entity"), args.entity)
+    project = cfg.get("project") or "hockey-rounds"
+    entity = cfg.get("entity")
     if not entity:
-        print("Entity is required: set in config (entity: your_username), pass --entity, or set env ENTITY.", file=sys.stderr)
+        print("Entity is required in config (training.yaml): set 'entity: your_wandb_username'.", file=sys.stderr)
         sys.exit(1)
+    max_rounds = coord.get("max_rounds", 50)
+    poll_interval = coord.get("poll_interval", 120)
+    timeout_hours = coord.get("timeout_hours", 24)
     builtin_cfg = cfg.get("builtin_opponents")
     if isinstance(builtin_cfg, list):
         builtin_opponents = [str(x).strip() for x in builtin_cfg if x]
@@ -90,7 +72,7 @@ def main():
     else:
         start_round = trigger_round + 1
         print(f"Resuming: round {trigger_round} in progress ({len(finished)}/{len(pool_keys)} finished). Waiting for round {trigger_round} to complete...")
-        deadline = time.time() + args.timeout_hours * 3600
+        deadline = time.time() + timeout_hours * 3600
         while time.time() < deadline:
             try:
                 finished = pool.read_finished_pool_keys_merged(entity, project, trigger_round)
@@ -101,12 +83,12 @@ def main():
             if len(finished) >= len(pool_keys):
                 print(f"Round {trigger_round} complete. Starting from round {start_round}.")
                 break
-            time.sleep(args.poll_interval)
+            time.sleep(poll_interval)
         else:
             print(f"Round {trigger_round} timed out. Exiting.")
             sys.exit(1)
 
-    for round_n in range(start_round, args.max_rounds + 1):
+    for round_n in range(start_round, max_rounds + 1):
         pool.clear_finished_pool_keys(entity, project, round_n)
         finished = pool.read_finished_pool_keys_merged(entity, project, round_n)
         if len(finished) >= len(pool_keys):
@@ -119,7 +101,7 @@ def main():
         pool.write_round_trigger(entity, project, round_n, pool_keys, builtin_opponents, [])
 
         # Wait until all active pool keys are finished; meanwhile process key requests and assign one key per worker
-        deadline = time.time() + args.timeout_hours * 3600
+        deadline = time.time() + timeout_hours * 3600
         last_log = 0
         while time.time() < deadline:
             try:
@@ -144,14 +126,17 @@ def main():
                     print(f"Round {round_n} complete: all {len(active)} pool keys finished.")
                     break
                 now = time.time()
-                if done_count > 0 and now - last_log >= 60:
-                    print(f"Round {round_n}: {done_count}/{len(active)} pool keys finished, waiting...")
+                if now - last_log >= 60:
+                    if done_count > 0:
+                        print(f"Round {round_n}: {done_count}/{len(active)} pool keys finished, waiting...")
+                    else:
+                        print(f"Round {round_n}: waiting for workers (0/{len(active)} finished). Start workers on this or another machine with the same project/entity.")
                     last_log = now
             except Exception as e:
                 print(f"Error: {e}")
-            time.sleep(args.poll_interval)
+            time.sleep(poll_interval)
         else:
-            print(f"Round {round_n} timed out after {args.timeout_hours}h. Exiting.")
+            print(f"Round {round_n} timed out after {timeout_hours}h. Exiting.")
             break
     # Signal workers to stop (round=0, no pool_keys)
     try:

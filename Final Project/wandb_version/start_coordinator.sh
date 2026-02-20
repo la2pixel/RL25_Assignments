@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+üy#!/usr/bin/env bash
 # Start the round-based training coordinator: ensure conda env and deps, then run coordinator with training.yaml.
 # Usage: ./wandb_version/start_coordinator.sh [optional args, e.g. --max_rounds 2 --poll_interval 15]
 set -e

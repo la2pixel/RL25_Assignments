@@ -1,19 +1,20 @@
-# Training config: coordinator and workers use this.
-# Coordinator: pool_keys = keys of "specs"; project/entity/builtin_opponents; and "coordinator" section below.
-# Workers/train_parallel: load "training" + specs[pool_key] for hyperparameters.
+# Training config: coordinator and workers use this. .env only for WANDB_API_KEY.
+# Set project, entity, and all run settings here; coordinator and workers must use the same config.
 #
 # Algo: td3 | sac
 # Reward modes: default | attack | defense | proven
 
-project: hockey-rounds
-entity: null   # set via env (ENTITY) or CLI --entity
+project: testy
+entity: meloneneis   # required: your wandb username (same on all machines)
 builtin_opponents: [weak, strong]
 
-# Coordinator-only (CLI flags override these). Round is inferred from wandb trigger + finished-pool on startup.
 coordinator:
-  max_rounds: 5
+  max_rounds: 100
   poll_interval: 120
   timeout_hours: 24
+
+worker:
+  poll_interval: 60
 
 # Global training params (apply to all specs unless overridden per-spec)
 training:
@@ -23,8 +24,8 @@ training:
   buffer_size: 1000000
   learning_starts: 10000
   update_ratio: 0.25
-  log_freq: 500
-  eval_freq: 500
+  log_freq: 5000
+  eval_freq: 20000
   device: null
   save_dir: checkpoints
   eval_1v1_games: 100

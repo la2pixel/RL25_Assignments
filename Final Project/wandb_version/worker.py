@@ -21,23 +21,22 @@ import config_loader as cl
 
 def main():
     default_config = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config", "training.yaml")
-    parser = argparse.ArgumentParser(description="Worker: poll coordinator (wandb), request one pool key per round, run training.")
+    parser = argparse.ArgumentParser(description="Worker: all settings from config (training.yaml). .env only for WANDB_API_KEY.")
     parser.add_argument("--config", type=str, default=default_config, help="Path to training config YAML (same as coordinator)")
-    parser.add_argument("--entity", type=str, default=None, help="wandb entity (overrides config and ENTITY env)")
-    parser.add_argument("--project", type=str, default=None, help="wandb project (overrides config and WANDB_PROJECT env)")
-    parser.add_argument("--poll_interval", type=int, default=60, help="seconds between polling for new round")
-    parser.add_argument("--total_timesteps", type=int, default=None, help="if set, pass to train script to override config (e.g. quick tests)")
     args = parser.parse_args()
 
     cfg = cl.load_config(args.config)
-    # CLI > env > config
-    entity = args.entity or os.environ.get("ENTITY") or cfg.get("entity")
+    entity = cfg.get("entity")
     if not entity:
-        print("Entity is required: set in config, pass --entity, or set env ENTITY.", file=sys.stderr)
+        print("Entity is required in config (training.yaml): set 'entity: your_wandb_username'.", file=sys.stderr)
         sys.exit(1)
-    project = args.project or os.environ.get("WANDB_PROJECT") or cfg.get("project") or "hockey-rounds"
+    project = cfg.get("project") or "hockey-rounds"
+    worker_cfg = cfg.get("worker") or {}
+    poll_interval = worker_cfg.get("poll_interval", 60)
     args.entity = entity
     args.project = project
+    args.poll_interval = poll_interval
+    print(f"Using project: {project!r} | entity: {entity!r}")
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
     parent_dir = os.path.dirname(script_dir)
@@ -106,8 +105,6 @@ def main():
             "--wandb_project", args.project,
             "--builtin_opponents", ",".join(builtin_opponents),
         ]
-        if getattr(args, "total_timesteps", None) is not None:
-            cmd += ["--total_timesteps", str(args.total_timesteps)]
         ret = subprocess.run(cmd, cwd=parent_dir)
         if ret.returncode != 0:
             print(f"[Round {current_round}] Pool key {pool_key} exited with code {ret.returncode}")
