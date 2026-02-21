@@ -194,6 +194,64 @@ def read_finished_pool_keys_merged(entity, project, round_n=None):
     return result
 
 
+def _finished_pool_curated_artifact_name(round_n):
+    return f"finished-pool-round-{round_n}-curated"
+
+
+def read_finished_pool_keys_curated(entity, project, round_n=None):
+    """If someone created a curated artifact (e.g. finished-pool-round-2-curated) with the correct list of
+    finished keys for this round, return that list. Otherwise return None. Use this to fix rounds where
+    the merge has stale entries (e.g. from a deleted run)."""
+    round_n = _resolve_round(entity, project, round_n)
+    api = _api(entity, project)
+    name = _finished_pool_curated_artifact_name(round_n)
+    try:
+        art = api.artifact(f"{entity}/{project}/{name}:latest")
+        return _pool_keys_from_finished_artifact(art)
+    except Exception:
+        pass
+    return None
+
+
+def write_finished_pool_keys_curated(entity, project, round_n, pool_keys):
+    """Write a curated finished list for this round (artifact finished-pool-round-{n}-curated).
+    Use this to fix a round where the merge has stale keys (e.g. td3-default from a deleted run).
+    Coordinator and workers will use this list instead of the merged finished-pool-round-{n} when present."""
+    import wandb
+    round_n = _resolve_round(entity, project, round_n)
+    name = _finished_pool_curated_artifact_name(round_n)
+    keys = list(pool_keys)
+    run = wandb.run
+    if run is None:
+        run = wandb.init(project=project, entity=entity, job_type="curated", name="curated-finished")
+    art = wandb.Artifact(name, type="config")
+    art.metadata["pool_keys"] = keys
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        json.dump(keys, f)
+        f.flush()
+        art.add_file(f.name, "finished_pool_keys.json")
+    try:
+        os.unlink(f.name)
+    except Exception:
+        pass
+    run.log_artifact(art, aliases=["latest"])
+
+
+def read_finished_pool_keys_merged_filtered(entity, project, round_n=None):
+    """Same as read_finished_pool_keys_merged, but:
+    1) If a curated artifact exists (finished-pool-round-{n}-curated), use that list.
+    2) Else only count a key as finished if it has a registered run in round-worker-runs-{n} (pool_keys_by_worker).
+       Avoids counting stale entries from deleted runs. If no registry data exists, returns the raw merge."""
+    curated = read_finished_pool_keys_curated(entity, project, round_n)
+    if curated is not None:
+        return curated
+    finished_raw = read_finished_pool_keys_merged(entity, project, round_n)
+    keys_with_run = read_pool_keys_with_registered_run(entity, project, round_n)
+    if keys_with_run:
+        return [k for k in finished_raw if k in keys_with_run]
+    return finished_raw
+
+
 # Key assignment: workers request a key via round-requests-{N}; coordinator is sole writer of round-assignments-{N}
 def _round_requests_artifact_name(round_n):
     return f"round-requests-{round_n}"
@@ -366,26 +424,46 @@ def _worker_run_registry_artifact_name(round_n):
     return f"round-worker-runs-{round_n}"
 
 
+def _registry_from_artifact(art):
+    """Extract {worker_id: run_path} from a round-worker-runs artifact (supports legacy string or dict value)."""
+    d = {}
+    if hasattr(art, "metadata") and art.metadata and "registry" in art.metadata:
+        d = dict(art.metadata["registry"])
+    else:
+        try:
+            root = art.download()
+            path = os.path.join(root, "registry.json")
+            if os.path.isfile(path):
+                with open(path) as f:
+                    d = json.load(f)
+        except Exception:
+            pass
+    result = {}
+    for k, v in d.items():
+        if isinstance(v, dict) and "run_path" in v:
+            result[k] = v["run_path"]
+        else:
+            result[k] = v
+    return result
+
+
+def _pool_keys_by_worker_from_artifact(art):
+    """Extract {worker_id: pool_key} from artifact metadata if present."""
+    if hasattr(art, "metadata") and art.metadata and "pool_keys_by_worker" in art.metadata:
+        return dict(art.metadata["pool_keys_by_worker"])
+    return {}
+
+
 def read_worker_run_registry(entity, project, round_n):
     """Return dict {worker_id: run_path} by merging all versions of round-worker-runs-{n}.
     Coordinator uses this to check wandb run state (running/crashed/finished) for crash recovery."""
+    round_n = _resolve_round(entity, project, round_n)
     api = _api(entity, project)
     art_name = _worker_run_registry_artifact_name(round_n)
     merged = {}
     try:
         for art in api.artifacts(type_name="config", name=f"{entity}/{project}/{art_name}", per_page=50):
-            d = {}
-            if hasattr(art, "metadata") and art.metadata and "registry" in art.metadata:
-                d = dict(art.metadata["registry"])
-            else:
-                try:
-                    root = art.download()
-                    path = os.path.join(root, "registry.json")
-                    if os.path.isfile(path):
-                        with open(path) as f:
-                            d = json.load(f)
-                except Exception:
-                    pass
+            d = _registry_from_artifact(art)
             for k, v in d.items():
                 merged[k] = v
     except Exception:
@@ -393,16 +471,46 @@ def read_worker_run_registry(entity, project, round_n):
     return merged
 
 
-def register_worker_run(entity, project, round_n, worker_id, run_path):
-    """Training run calls this after wandb.init(): register worker_id -> run_path so coordinator can check run state."""
+def read_pool_keys_with_registered_run(entity, project, round_n=None):
+    """Return set of pool keys that have at least one worker run registered for this round (from round-worker-runs-{n}).
+    Used to filter finished list: only count a key as finished if it has a registered run (avoids stale finished entries)."""
+    round_n = _resolve_round(entity, project, round_n)
+    api = _api(entity, project)
+    art_name = _worker_run_registry_artifact_name(round_n)
+    keys = set()
+    try:
+        for art in api.artifacts(type_name="config", name=f"{entity}/{project}/{art_name}", per_page=50):
+            for wid, pk in _pool_keys_by_worker_from_artifact(art).items():
+                if pk:
+                    keys.add(pk)
+    except Exception:
+        pass
+    return keys
+
+
+def register_worker_run(entity, project, round_n, worker_id, run_path, pool_key=None):
+    """Training run calls this after wandb.init(): register worker_id -> run_path so coordinator can check run state.
+    If pool_key is provided, it is stored so coordinator can filter finished list to only keys with a registered run."""
     import wandb
+    round_n = _resolve_round(entity, project, round_n)
     merged = read_worker_run_registry(entity, project, round_n)
     merged[worker_id] = run_path
+    merged_pool_keys = {}
+    try:
+        for art in _api(entity, project).artifacts(type_name="config", name=f"{entity}/{project}/{_worker_run_registry_artifact_name(round_n)}", per_page=50):
+            for wid, pk in _pool_keys_by_worker_from_artifact(art).items():
+                if pk and wid not in merged_pool_keys:
+                    merged_pool_keys[wid] = pk
+    except Exception:
+        pass
+    if pool_key:
+        merged_pool_keys[worker_id] = pool_key
     run = wandb.run
     if run is None:
         run = wandb.init(project=project, entity=entity, job_type="worker")
     art = wandb.Artifact(_worker_run_registry_artifact_name(round_n), type="config")
     art.metadata["registry"] = dict(merged)
+    art.metadata["pool_keys_by_worker"] = dict(merged_pool_keys)
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
         json.dump(merged, f)
         f.flush()

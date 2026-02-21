@@ -267,7 +267,7 @@ def train_parallel(args):
         # Register this run so coordinator can check run state (running/crashed/finished) for crash recovery
         if round_based and pool_key and pool is not None and getattr(args, 'worker_id', None) and getattr(args, 'round', None):
             run_path = getattr(wandb.run, 'path', None) or f"{getattr(args, 'entity', '')}/{project}/{wandb.run.id}"
-            pool.register_worker_run(getattr(args, 'entity', None), project, getattr(args, 'round', 0), args.worker_id, run_path)
+            pool.register_worker_run(getattr(args, 'entity', None), project, getattr(args, 'round', 0), args.worker_id, run_path, pool_key=pool_key)
 
     envs = AsyncVectorEnv([
         make_env(op, i, path, reward_mode=args.reward_mode, opponent_algo=algo)

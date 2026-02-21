@@ -72,7 +72,7 @@ def main():
     except Exception:
         trigger = {}
     trigger_round = trigger.get("round", 0)
-    finished = pool.read_finished_pool_keys_merged(entity, project, trigger_round) if trigger_round > 0 else []
+    finished = pool.read_finished_pool_keys_merged_filtered(entity, project, trigger_round) if trigger_round > 0 else []
     stop_requested = False
     if trigger_round == 0 or len(finished) >= len(pool_keys):
         start_round = trigger_round + 1 if trigger_round > 0 else 1
@@ -82,6 +82,7 @@ def main():
         start_round = trigger_round + 1
         print(f"Resuming: round {trigger_round} in progress ({len(finished)}/{len(pool_keys)} finished). Assigning keys to workers and waiting for round {trigger_round} to complete...")
         deadline = time.time() + timeout_hours * 3600
+        last_resume_log = 0
         while time.time() < deadline:
             try:
                 if os.path.isfile(stop_after_round_file) and not stop_requested:
@@ -96,7 +97,7 @@ def main():
                 assignments = pool.read_key_assignments(entity, project, trigger_round)
                 timestamps = pool.read_assignment_timestamps(entity, project, trigger_round)
                 registry = pool.read_worker_run_registry(entity, project, trigger_round)
-                finished = pool.read_finished_pool_keys_merged(entity, project, trigger_round)
+                finished = pool.read_finished_pool_keys_merged_filtered(entity, project, trigger_round)
                 now = time.time()
                 timeout_sec = assignment_timeout_hours * 3600
                 stale = []
@@ -135,6 +136,12 @@ def main():
                 if len(finished) >= len(pool_keys):
                     print(f"Round {trigger_round} complete. Starting from round {start_round}.")
                     break
+                # Periodic progress so the coordinator doesn't appear stuck
+                now = time.time()
+                if now - last_resume_log >= 60:
+                    waiting_for = [k for k in pool_keys if k not in finished]
+                    print(f"Round {trigger_round}: {len(finished)}/{len(pool_keys)} finished. Still waiting for: {waiting_for}")
+                    last_resume_log = now
             except Exception as e:
                 print(f"Error: {e}")
             time.sleep(poll_interval)
@@ -145,7 +152,7 @@ def main():
     if not stop_requested:
         for round_n in range(start_round, max_rounds + 1):
             pool.clear_finished_pool_keys(entity, project, round_n)
-            finished = pool.read_finished_pool_keys_merged(entity, project, round_n)
+            finished = pool.read_finished_pool_keys_merged_filtered(entity, project, round_n)
             if len(finished) >= len(pool_keys):
                 print("All pool keys are finished. Exiting.")
                 break
@@ -172,7 +179,7 @@ def main():
                     assignments = pool.read_key_assignments(entity, project, round_n)
                     timestamps = pool.read_assignment_timestamps(entity, project, round_n)
                     registry = pool.read_worker_run_registry(entity, project, round_n)
-                    finished = pool.read_finished_pool_keys_merged(entity, project, round_n)
+                    finished = pool.read_finished_pool_keys_merged_filtered(entity, project, round_n)
                     now = time.time()
                     timeout_sec = assignment_timeout_hours * 3600
                     stale = []
@@ -215,10 +222,11 @@ def main():
                         break
                     now = time.time()
                     if now - last_log >= 60:
+                        waiting_for = [k for k in active if k not in finished]
                         if done_count > 0:
-                            print(f"Round {round_n}: {done_count}/{len(active)} pool keys finished, waiting...")
+                            print(f"Round {round_n}: {done_count}/{len(active)} pool keys finished. Still waiting for: {waiting_for}")
                         else:
-                            print(f"Round {round_n}: waiting for workers (0/{len(active)} finished). Start workers on this or another machine with the same project/entity.")
+                            print(f"Round {round_n}: waiting for workers (0/{len(active)} finished). Need: {waiting_for}. Start workers on this or another machine with the same project/entity.")
                         last_log = now
                 except Exception as e:
                     print(f"Error: {e}")

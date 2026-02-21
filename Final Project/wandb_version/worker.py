@@ -102,7 +102,9 @@ def main():
                 )
                 sys.exit(1)
             pool_key = dedicated_pool_key
-            if pool_key in pool.read_finished_pool_keys(args.entity, args.project, current_round):
+            # Use merged finished list (same as coordinator) so we don't skip when :latest is stale (e.g. after a deleted run)
+            finished_this_round = pool.read_finished_pool_keys_merged_filtered(args.entity, args.project, current_round)
+            if pool_key in finished_this_round:
                 last_round_done = current_round
                 time.sleep(args.poll_interval)
                 continue
@@ -112,7 +114,7 @@ def main():
                 time.sleep(args.poll_interval)
                 continue
 
-            finished = pool.read_finished_pool_keys(args.entity, args.project, current_round)
+            finished = pool.read_finished_pool_keys_merged_filtered(args.entity, args.project, current_round)
             if len(finished) >= len(pool_keys):
                 time.sleep(args.poll_interval)
                 continue
@@ -123,7 +125,7 @@ def main():
             print(f"[Round {current_round}] Staggering key request by {delay:.1f}s to reduce collision.")
             time.sleep(delay)
             # Re-check finished count after delay in case round completed
-            finished = pool.read_finished_pool_keys(args.entity, args.project, current_round)
+            finished = pool.read_finished_pool_keys_merged_filtered(args.entity, args.project, current_round)
             if len(finished) >= len(pool_keys):
                 time.sleep(args.poll_interval)
                 continue
