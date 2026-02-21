@@ -177,7 +177,7 @@ def make_env(opponent_type, rank=0, opponent_model_path=None, reward_mode='defau
             obs_dim = raw_env.observation_space.shape[0]
             action_dim = raw_env.action_space.shape[0] // 2
             if opponent_algo == 'td3':
-                op_agent = TD3Agent(state_dim=obs_dim, action_dim=action_dim)
+                op_agent = TD3Agent(state_dim=obs_dim, action_dim=action_dim, hidden_sizes=(512, 512))
                 try:
                     op_agent.load(opponent_model_path)
                 except Exception:
@@ -363,6 +363,7 @@ def train_parallel(args):
     obs_dim = dummy_obs.shape[0]
     action_dim = envs.single_action_space.shape[0] // 2
 
+    hidden = getattr(args, 'hidden_size', 512)
     agent = TD3Agent(
         state_dim=obs_dim,
         action_dim=action_dim,
@@ -374,6 +375,7 @@ def train_parallel(args):
         policy_noise=args.policy_noise,
         noise_clip=args.noise_clip,
         policy_delay=args.policy_delay,
+        hidden_sizes=(hidden, hidden),
     )
     device = agent.device
 
@@ -564,6 +566,7 @@ if __name__ == "__main__":
     parser.add_argument('--policy_noise', type=float, default=0.2)
     parser.add_argument('--noise_clip', type=float, default=0.5)
     parser.add_argument('--policy_delay', type=int, default=2)
+    parser.add_argument('--hidden_size', type=int, default=512, help='Actor/critic hidden layer size (default 512, same as SAC)')
 
     # Opponents
     parser.add_argument('--opponent', type=str, default='mix')

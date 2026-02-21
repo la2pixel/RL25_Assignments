@@ -121,7 +121,7 @@ def make_env(opponent_type, rank=0, opponent_model_path=None, reward_mode='defau
             obs_dim = raw_env.observation_space.shape[0]
             action_dim = raw_env.action_space.shape[0] // 2
             if opponent_algo == 'td3':
-                op_agent = TD3Agent(state_dim=obs_dim, action_dim=action_dim)
+                op_agent = TD3Agent(state_dim=obs_dim, action_dim=action_dim, hidden_sizes=(512, 512))
             else:
                 op_agent = SAC(obs_dim=obs_dim, action_dim=action_dim, device="cpu", hidden_sizes=(512, 512))
             try:
@@ -285,11 +285,13 @@ def train_parallel(args):
     action_dim = envs.single_action_space.shape[0] // 2
 
     if args.algo == 'td3':
+        hidden = getattr(args, 'hidden_size', 512)
         agent = TD3Agent(
             state_dim=obs_dim, action_dim=action_dim,
             gamma=args.gamma, polyak=args.polyak,
             policy_lr=args.policy_lr, critic_lr=args.critic_lr,
             act_noise_std=args.act_noise_std, policy_noise=args.policy_noise, noise_clip=args.noise_clip, policy_delay=args.policy_delay,
+            hidden_sizes=(hidden, hidden),
         )
         best_name = "td3_hockey_best.pth"
         latest_name = "td3_hockey_latest.pth"

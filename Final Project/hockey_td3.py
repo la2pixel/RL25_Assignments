@@ -5,32 +5,42 @@ import numpy as np
 
 
 class Actor(nn.Module):
-    def __init__(self, state_dim, action_dim):
+    """Same layout as SAC actor: hidden_sizes = (512,) or (512, 512) etc."""
+    def __init__(self, state_dim, action_dim, hidden_sizes=(512, 512)):
         super(Actor, self).__init__()
-        self.layer1 = nn.Linear(state_dim, 256)
-        self.layer2 = nn.Linear(256, 256)
-        self.layer3 = nn.Linear(256, action_dim)
+        if len(hidden_sizes) < 1:
+            hidden_sizes = (512,)
+        sizes = [state_dim] + list(hidden_sizes)
+        self.layers = nn.ModuleList()
+        for i in range(len(sizes) - 1):
+            self.layers.append(nn.Linear(sizes[i], sizes[i + 1]))
+        self.out = nn.Linear(sizes[-1], action_dim)
 
     def forward(self, state):
-        x = F.relu(self.layer1(state))
-        x = F.relu(self.layer2(x))
-        x = torch.tanh(self.layer3(x))
-        return x
+        x = state
+        for layer in self.layers:
+            x = F.relu(layer(x))
+        return torch.tanh(self.out(x))
 
 
 class Critic(nn.Module):
-    def __init__(self, state_dim, action_dim):
+    """Same layout as SAC critic: hidden_sizes = (512,) or (512, 512) etc."""
+    def __init__(self, state_dim, action_dim, hidden_sizes=(512, 512)):
         super(Critic, self).__init__()
-        self.layer1 = nn.Linear(state_dim + action_dim, 256)
-        self.layer2 = nn.Linear(256, 256)
-        self.layer3 = nn.Linear(256, 1)
+        if len(hidden_sizes) < 1:
+            hidden_sizes = (512,)
+        input_dim = state_dim + action_dim
+        sizes = [input_dim] + list(hidden_sizes)
+        self.layers = nn.ModuleList()
+        for i in range(len(sizes) - 1):
+            self.layers.append(nn.Linear(sizes[i], sizes[i + 1]))
+        self.out = nn.Linear(sizes[-1], 1)
 
     def forward(self, state, action):
         x = torch.hstack([state, action])
-        x = F.relu(self.layer1(x))
-        x = F.relu(self.layer2(x))
-        x = self.layer3(x)
-        return x
+        for layer in self.layers:
+            x = F.relu(layer(x))
+        return self.out(x)
 
 
 class TD3Agent:
@@ -46,33 +56,36 @@ class TD3Agent:
         policy_noise=0.2,
         noise_clip=0.5,
         policy_delay=2,
+        hidden_sizes=(512, 512),
     ):
         # check if gpu is available
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if isinstance(hidden_sizes, int):
+            hidden_sizes = (hidden_sizes, hidden_sizes)
 
         # initializing networks
         # main actor
-        self.actor = Actor(state_dim, action_dim).to(self.device)
+        self.actor = Actor(state_dim, action_dim, hidden_sizes).to(self.device)
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=policy_lr)
 
         # target actor
-        self.actor_target = Actor(state_dim, action_dim).to(self.device)
+        self.actor_target = Actor(state_dim, action_dim, hidden_sizes).to(self.device)
         self.actor_target.load_state_dict(self.actor.state_dict())
 
         # main critic1
-        self.critic1 = Critic(state_dim, action_dim).to(self.device)
+        self.critic1 = Critic(state_dim, action_dim, hidden_sizes).to(self.device)
         self.critic1_optimizer = torch.optim.Adam(self.critic1.parameters(), lr=critic_lr)
 
         # target critic1
-        self.critic1_target = Critic(state_dim, action_dim).to(self.device)
+        self.critic1_target = Critic(state_dim, action_dim, hidden_sizes).to(self.device)
         self.critic1_target.load_state_dict(self.critic1.state_dict())
 
         # main critic2
-        self.critic2 = Critic(state_dim, action_dim).to(self.device)
+        self.critic2 = Critic(state_dim, action_dim, hidden_sizes).to(self.device)
         self.critic2_optimizer = torch.optim.Adam(self.critic2.parameters(), lr=critic_lr)
 
         # target critic2
-        self.critic2_target = Critic(state_dim, action_dim).to(self.device)
+        self.critic2_target = Critic(state_dim, action_dim, hidden_sizes).to(self.device)
         self.critic2_target.load_state_dict(self.critic2.state_dict())
 
         # hyperparameters

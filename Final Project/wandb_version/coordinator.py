@@ -38,6 +38,9 @@ def main():
     cfg = cl.load_config(args.config)
     coord = cfg.get("coordinator") or {}
     pool_keys = cl.get_pool_keys_from_config(args.config)
+    dedicated_specs = cfg.get("dedicated_specs") is True
+    if dedicated_specs:
+        print(f"dedicated_specs: true — all workers must run with --algo and --reward_mode. Pool keys: {pool_keys}")
     project = cfg.get("project") or "hockey-rounds"
     entity = cfg.get("entity")
     if not entity:

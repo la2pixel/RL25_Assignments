@@ -10,14 +10,31 @@ builtin_opponents: [weak, strong]
 
 coordinator:
   max_rounds: 100
-  poll_interval: 30
+  poll_interval: 60
   timeout_hours: 24
-  assignment_timeout_hours: 2   # free pool key if worker assigned but not finished for this long (crash recovery)
+  assignment_timeout_hours: 4   # free pool key if worker assigned but not finished for this long (crash recovery)
 
 worker:
   poll_interval: 30
 
-# Global training params (apply to all specs unless overridden per-spec)
+# dedicated_specs: true  = all workers must run with --algo and --reward_mode (one spec per worker).
+# dedicated_specs: false = coordinator assigns a spec from the specs list to each worker automatically.
+dedicated_specs: True
+
+# Pool keys for this run (list). Format: {algo}-{reward_mode} (e.g. sac-attack, td3-defense).
+# Coordinator uses this list; each worker gets one key per round.
+# When dedicated_specs: true, run one worker per key, each with --algo X --reward_mode Y for that key.
+specs:
+  - td3-default
+  - td3-attack
+  - td3-proven
+  - td3-defense
+  - sac-default
+  - sac-attack
+  - sac-proven
+  - sac-defense
+
+# Global training params (apply to all specs)
 training:
   total_timesteps: 4000000
   num_envs: 10
@@ -39,40 +56,13 @@ training:
   policy_noise: 0.2
   noise_clip: 0.5
   policy_delay: 2
+  # Network size (TD3 and SAC)
+  hidden_size: 512
   # SAC defaults (only used if algo: sac)
   actor_learning_rate: 3.0e-4
   critic_learning_rate: 3.0e-4
   alpha_learning_rate: 3.0e-4
   tau: 0.005
   alpha: 0.2
-  hidden_size: 512
   pink_noise: false
   noise_beta: 1.0
-
-# Per-spec (pool key): algo + reward_mode required; other keys override "training" for that spec.
-# Pool key format: {algo}-{reward_mode} (e.g. td3-default, sac-attack). Add or remove specs as needed.
-specs:
-  td3-default:
-    algo: td3
-    reward_mode: default
-  td3-attack:
-    algo: td3
-    reward_mode: attack
-  td3-proven:
-    algo: td3
-    reward_mode: proven
-  td3-defense:
-    algo: td3
-    reward_mode: defense
-  sac-default:
-    algo: sac
-    reward_mode: default
-  sac-attack:
-    algo: sac
-    reward_mode: attack
-  sac-proven:
-    algo: sac
-    reward_mode: proven
-  sac-defense:
-    algo: sac
-    reward_mode: defense

@@ -1,13 +1,17 @@
 """
-Load training config YAML: global training params + per-spec (pool key) overrides.
+Load training config YAML: global training params + specs (list of pool keys).
 Used by coordinator (pool_keys, project, entity, builtin_opponents) and workers/train_parallel (full args for a spec).
+
+Config shape:
+  specs: list of pool keys in format {algo}-{reward_mode} (e.g. td3-default, sac-attack). Algo and reward_mode are derived from the string.
+  dedicated_specs: boolean. When true, all workers must run with --algo and --reward_mode.
 """
 
 import os
 
 
 def load_config(path):
-    """Load YAML config. Returns dict with keys: project, entity, training, specs, builtin_opponents."""
+    """Load YAML config. Returns dict with keys: project, entity, training, specs (list), dedicated_specs (bool)."""
     try:
         import yaml
     except ImportError:
@@ -22,36 +26,45 @@ def load_config(path):
     return data
 
 
+def parse_pool_key(pool_key):
+    """Derive (algo, reward_mode) from a pool key string (e.g. sac-attack -> ('sac', 'attack'))."""
+    s = (pool_key or "").strip()
+    if not s or "-" not in s:
+        raise ValueError(f"Pool key must be in format algo-reward_mode, got: {pool_key!r}")
+    algo, reward_mode = s.split("-", 1)
+    return algo.strip().lower(), reward_mode.strip().lower()
+
+
 def get_pool_keys_from_config(config_path):
-    """Return list of pool keys (spec names) from config specs section."""
+    """Return list of pool keys from config. specs must be a list of pool key names (algo-reward_mode)."""
     data = load_config(config_path)
-    specs = data.get("specs") or {}
-    if not specs:
-        raise ValueError("Config must have a 'specs' section with at least one spec (pool key -> algo, reward_mode)")
-    return list(specs.keys())
+    specs = data.get("specs")
+    if specs is None:
+        raise ValueError("Config must have a 'specs' section (list of pool keys, e.g. [td3-default, sac-attack, ...])")
+    if isinstance(specs, list):
+        return [str(k).strip() for k in specs if k]
+    if isinstance(specs, dict):
+        return list(specs.keys())
+    raise ValueError("Config 'specs' must be a list of pool keys or a dict (legacy)")
 
 
 def get_merged_training_args(config_path, pool_key):
     """
     Return a flat dict of training arguments for the given pool key.
-    Merges: training (global) + specs[pool_key] (overrides). Keys match train_parallel argparse names.
+    Algo and reward_mode are derived from the pool key (format: algo-reward_mode). Merged with training section.
     """
     data = load_config(config_path)
-    specs = data.get("specs") or {}
-    if pool_key not in specs:
-        raise ValueError(f"Pool key '{pool_key}' not found in config specs. Available: {list(specs.keys())}")
-    spec = dict(specs[pool_key])
-    if "algo" not in spec or "reward_mode" not in spec:
-        raise ValueError(f"Spec '{pool_key}' must have 'algo' and 'reward_mode'")
+    pool_keys = get_pool_keys_from_config(config_path)
+    if pool_key not in pool_keys:
+        raise ValueError(f"Pool key '{pool_key}' not in config specs. Available: {pool_keys}")
+    algo, reward_mode = parse_pool_key(pool_key)
     training = dict(data.get("training") or {})
-    # Merge: training first, then spec overrides (spec can override hyperparams, not just algo/reward_mode)
-    merged = {**training, **spec}
-    return merged
+    return {**training, "algo": algo, "reward_mode": reward_mode}
 
 
 def apply_config_to_args(args, config_path, pool_key):
     """
-    Apply config (training + spec[pool_key]) to an argparse Namespace.
+    Apply config (training + algo/reward_mode from pool_key) to an argparse Namespace.
     Only sets attributes that exist on args and are present in the merged config.
     """
     merged = get_merged_training_args(config_path, pool_key)

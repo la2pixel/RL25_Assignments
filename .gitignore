@@ -25,9 +25,10 @@ HW7*
 
 # Final Project: run artifacts and caches (do not push)
 Final Project/wandb/
+Final Project/wandb_version/wandb/
 Final Project/checkpoints/
 Final Project/pool_cache/
 Final Project/artifacts/
 Final Project/.worker_last_round*
 wandb_version/checkpoints/
-wandb_version/wandb/
+**/wandb/
