@@ -59,9 +59,9 @@ training:
     sac_attack_r3.pth,
     td3_default_r2.pth,
     td3_proven_r3.pth,
-    sac_proven_r3.pth
-    sac_hockey_best_defensive3.pth
-    sac_hockey_best_proven1.pth
+    sac_proven_r3.pth,
+    sac_hockey_best_defensive3.pth,
+    sac_hockey_best_proven1.pth,
     sac_hockey_best_proven3.pth
   ]
   # TD3 defaults
