@@ -136,7 +136,9 @@ def _resolve_opponents(names, model_dir):
             algo = "td3" if "td3" in s.lower() else "sac"
             result.append(("model", path, algo))
         else:
-            result.append(("weak", None, None))  # fallback
+            raise ValueError(
+                f"Unknown opponent name {name!r}. Valid: 'weak', 'strong', or a .pth filename (e.g. td3_default_r1.pth)."
+            )
     return result
 
 
@@ -156,8 +158,10 @@ def make_env(opponent_type, rank=0, opponent_model_path=None, reward_mode='defau
                 op_agent = SAC(obs_dim=obs_dim, action_dim=action_dim, device="cpu", hidden_sizes=(512, 512))
             try:
                 op_agent.load(opponent_model_path)
-            except Exception:
-                opponent = h_env.BasicOpponent(weak=True)
+            except Exception as e:
+                raise RuntimeError(
+                    f"Failed to load opponent from {opponent_model_path!r}. Fix path or checkpoint; no silent fallback to weak."
+                ) from e
             else:
                 class AgentOpponent:
                     def __init__(self, agent): self.agent = agent
@@ -330,11 +334,15 @@ def train_parallel(args):
         for i, (op, path, algo) in enumerate(zip(opponent_types, opponent_paths, opponent_algos_per_env))
     ])
     # Evaluation opponents (unseen): from config, resolved with model_dir; not used for training
-    eval_opponent_names = getattr(args, 'evaluation_opponents', None) or ['weak', 'strong']
+    eval_opponent_names = getattr(args, 'evaluation_opponents', None)
+    if eval_opponent_names is None:
+        eval_opponent_names = []
     if isinstance(eval_opponent_names, str):
         eval_opponent_names = [s.strip() for s in eval_opponent_names.split(",") if s.strip()]
     if not eval_opponent_names:
-        eval_opponent_names = ['weak', 'strong']
+        raise ValueError(
+            "evaluation_opponents must be set in config (non-empty list: weak, strong, and/or .pth filenames under model_dir)."
+        )
     eval_triples = _resolve_opponents(eval_opponent_names, model_dir)
     eval_envs = []
     for i, (t, path, algo) in enumerate(eval_triples):

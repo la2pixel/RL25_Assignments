@@ -37,7 +37,11 @@ def main():
     if not entity:
         print("Entity is required in config (training.yaml): set 'entity: your_wandb_username'.", file=sys.stderr)
         sys.exit(1)
-    project = cfg.get("project") or "hockey-rounds"
+    project = cfg.get("project")
+    if not project or not str(project).strip():
+        print("Config must set 'project' (e.g. hockey-rounds).", file=sys.stderr)
+        sys.exit(1)
+    project = str(project).strip()
     worker_cfg = cfg.get("worker") or {}
     poll_interval = worker_cfg.get("poll_interval", 60)
     args.entity = entity

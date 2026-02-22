@@ -26,13 +26,22 @@ def load_config(path):
     return data
 
 
+VALID_ALGOS = ("td3", "sac")
+VALID_REWARD_MODES = ("default", "attack", "defense", "proven")
+
+
 def parse_pool_key(pool_key):
-    """Derive (algo, reward_mode) from a pool key string (e.g. sac-attack -> ('sac', 'attack'))."""
+    """Derive (algo, reward_mode) from a pool key string (e.g. sac-attack -> ('sac', 'attack')). Raises on invalid format or unknown algo/reward_mode."""
     s = (pool_key or "").strip()
     if not s or "-" not in s:
         raise ValueError(f"Pool key must be in format algo-reward_mode, got: {pool_key!r}")
     algo, reward_mode = s.split("-", 1)
-    return algo.strip().lower(), reward_mode.strip().lower()
+    algo, reward_mode = algo.strip().lower(), reward_mode.strip().lower()
+    if algo not in VALID_ALGOS:
+        raise ValueError(f"Unknown algo {algo!r} in pool key {pool_key!r}. Valid: {VALID_ALGOS}")
+    if reward_mode not in VALID_REWARD_MODES:
+        raise ValueError(f"Unknown reward_mode {reward_mode!r} in pool key {pool_key!r}. Valid: {VALID_REWARD_MODES}")
+    return algo, reward_mode
 
 
 def get_pool_keys_from_config(config_path):

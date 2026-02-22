@@ -8,10 +8,11 @@ import os
 import json
 import tempfile
 
-# Reward shape name -> reward_mode for env
+# Reward shape name -> reward_mode for env (must match pool key suffix)
 REWARD_MAP = {
     "default": "default",
     "attack": "attack",
+    "defense": "defense",
     "proven": "proven",
 }
 
@@ -33,17 +34,23 @@ def _algo_from_pool_key(pool_key):
 
 
 def parse_pool_key(pool_key):
-    """Return (algo, reward_mode) for a pool key (e.g. td3-default -> ('td3', 'default'))."""
-    if "-" in pool_key:
-        algo, reward = pool_key.split("-", 1)
-        return algo.strip().lower(), REWARD_MAP.get(reward.strip().lower(), "default")
-    return "td3", "default"
+    """Return (algo, reward_mode) for a pool key (e.g. td3-default -> ('td3', 'default')). Raises if format or reward mode is invalid."""
+    if not pool_key or "-" not in pool_key:
+        raise ValueError(f"Pool key must be in format algo-reward_mode (e.g. td3-default, sac-attack), got: {pool_key!r}")
+    algo, reward = pool_key.strip().split("-", 1)
+    algo, reward = algo.strip().lower(), reward.strip().lower()
+    if reward not in REWARD_MAP:
+        raise ValueError(
+            f"Unknown reward_mode {reward!r} in pool key {pool_key!r}. Valid: {list(REWARD_MAP.keys())}."
+        )
+    return algo, REWARD_MAP[reward]
 
 
 def download_pool(entity, project, pool_keys, cache_dir=None):
     """
     Download best artifacts for the given pool keys (improving opponents).
     Returns list of (pool_key, local_path, algo) in pool_keys order.
+    Raises on download failure for any key (no silent skip).
     """
     if cache_dir is None:
         cache_dir = os.path.join(os.getcwd(), "pool_cache")
@@ -61,8 +68,14 @@ def download_pool(entity, project, pool_keys, cache_dir=None):
                     break
             else:
                 result.append((key, root, _algo_from_pool_key(key)))
-        except Exception:
-            pass
+        except Exception as e:
+            err_msg = str(e).lower()
+            # Round 1 or new spec: artifact may not exist yet; skip only for "not found" style errors
+            if "not found" in err_msg or "does not exist" in err_msg or "no such" in err_msg:
+                continue
+            raise RuntimeError(
+                f"Failed to download pool artifact for key {key!r} ({name}). Fix artifact or network."
+            ) from e
     return result
 
 

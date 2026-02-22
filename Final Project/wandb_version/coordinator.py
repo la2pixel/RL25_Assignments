@@ -41,7 +41,11 @@ def main():
     dedicated_specs = cfg.get("dedicated_specs") is True
     if dedicated_specs:
         print(f"dedicated_specs: true — all workers must run with --algo and --reward_mode. Pool keys: {pool_keys}")
-    project = cfg.get("project") or "hockey-rounds"
+    project = cfg.get("project")
+    if not project or not str(project).strip():
+        print("Config must set 'project' (e.g. hockey-rounds).", file=sys.stderr)
+        sys.exit(1)
+    project = str(project).strip()
     entity = cfg.get("entity")
     if not entity:
         print("Entity is required in config (training.yaml): set 'entity: your_wandb_username'.", file=sys.stderr)
@@ -51,12 +55,16 @@ def main():
     timeout_hours = coord.get("timeout_hours", 24)
     assignment_timeout_hours = coord.get("assignment_timeout_hours", 2)
     builtin_cfg = (cfg.get("training") or {}).get("builtin_opponents") or cfg.get("builtin_opponents")
+    if builtin_cfg is None:
+        print("Config must set 'builtin_opponents' under 'training' or top-level (e.g. weak,strong or weak,strong,model.pth).", file=sys.stderr)
+        sys.exit(1)
     if isinstance(builtin_cfg, list):
         builtin_opponents = [str(x).strip() for x in builtin_cfg if x]
     else:
-        builtin_opponents = [s.strip() for s in (builtin_cfg or "weak,strong").split(",") if s.strip()]
+        builtin_opponents = [s.strip() for s in str(builtin_cfg).split(",") if s.strip()]
     if not builtin_opponents:
-        builtin_opponents = ["weak", "strong"]
+        print("Config 'builtin_opponents' must be non-empty (e.g. weak,strong).", file=sys.stderr)
+        sys.exit(1)
     print(f"Using project: {project!r} | entity: {entity!r} | pool_keys: {pool_keys}")
 
     # One minimal wandb run for the whole session (only for uploading artifacts; no metrics). Silent so only agent runs are visible in console.
