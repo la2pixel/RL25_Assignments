@@ -439,12 +439,12 @@ def train_parallel(args):
     obs, _ = envs.reset()
     total_steps = 0
     last_log_step = 0
-    best_eval_metric = float('inf')  # best = lowest loss rate
+    best_eval_metric = -float('inf')  # best = highest eval reward
     current_ep_rewards = np.zeros(args.num_envs)
     recent_rewards = deque(maxlen=100)
     os.makedirs(args.save_dir, exist_ok=True)
 
-    print(f"{'Step':>8} | {'SPS':>5} | {'Avg Reward':>10} | {'Best Loss%':>10}")
+    print(f"{'Step':>8} | {'SPS':>5} | {'Avg Reward':>10} | {'Best Metric':>10}")
 
     while total_steps < args.total_timesteps:
         if total_steps < args.learning_starts and not args.load_model:
@@ -499,7 +499,7 @@ def train_parallel(args):
             last_log_step = total_steps
             sps = int(total_steps / (time.time() - start_time))
             avg_rew = np.mean(recent_rewards) if recent_rewards else 0.0
-            print(f"{total_steps:8d} | {sps:5d} | {avg_rew:10.2f} | {best_eval_metric:10.1%}")
+            print(f"{total_steps:8d} | {sps:5d} | {avg_rew:10.2f} | {best_eval_metric:10.2f}")
 
         if total_steps % args.eval_freq < args.num_envs and total_steps >= args.learning_starts:
             n_eval = len(eval_envs)
@@ -529,8 +529,8 @@ def train_parallel(args):
             labels = [lab for lab, _ in eval_envs]
             lr_str = " ".join(f"{lab}:{lr:.1%}" for lab, lr in zip(labels, eval_loss_rates)) if eval_loss_rates else ""
             print(f"  [EVAL @ {total_steps}] Reward: {avg_reward:.2f} | LossRate: {avg_loss_rate:.1%} | {lr_str}")
-            if n_eval > 0 and avg_loss_rate < best_eval_metric:
-                best_eval_metric = avg_loss_rate
+            if n_eval > 0 and avg_reward > best_eval_metric:
+                best_eval_metric = avg_reward
                 agent.save(os.path.join(args.save_dir, best_name))
                 print(f"  >>> NEW BEST MODEL! <<<")
 
