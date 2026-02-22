@@ -4,7 +4,7 @@
 # Algo: td3 | sac
 # Reward modes: default | attack | defense | proven
 
-project: hockey-training-phase2
+project: hockey-training-phase2-v2
 entity: meloneneis   # required: your wandb username (same on all machines)
 
 coordinator:
@@ -39,8 +39,8 @@ training:
   buffer_size: 1000000
   learning_starts: 10000
   update_ratio: 0.25
-  log_freq: 5000
-  eval_freq: 20000
+  log_freq: 20000
+  eval_freq: 100000
   device: null
   save_dir: checkpoints
   model_dir: opponents
