@@ -126,12 +126,15 @@ def _resolve_opponents(names, model_dir):
             result.append(("weak", None, None))
         elif s.lower() == "strong":
             result.append(("strong", None, None))
-        elif s.endswith(".pth") and model_dir:
-            path = os.path.join(model_dir, s)
+        elif s.endswith(".pth"):
+            if os.path.sep in s or '/' in s or '\\' in s:
+                path = os.path.abspath(s)
+            elif model_dir:
+                path = os.path.join(model_dir, s)
+            else:
+                path = os.path.abspath(s)
             algo = "td3" if "td3" in s.lower() else "sac"
             result.append(("model", path, algo))
-        elif s.endswith(".pth"):
-            result.append(("model", os.path.abspath(s), "td3" if "td3" in s.lower() else "sac"))
         else:
             result.append(("weak", None, None))  # fallback
     return result
@@ -259,6 +262,20 @@ def train_parallel(args):
     for p, a in zip(opponent_models, opponent_algos):
         training_opponent_triples.append(("model", p, a if a else "sac"))
     num_training_opponents = len(training_opponent_triples)
+
+    # --- Debug: print resolved training opponent triples ---
+    print(f"\n{'='*60}")
+    print(f"TRAINING OPPONENT POOL ({num_training_opponents} opponents)")
+    print(f"{'='*60}")
+    for idx, (t, p, a) in enumerate(training_opponent_triples):
+        if t in ('weak', 'strong'):
+            print(f"  [{idx}] {t} (builtin)")
+        else:
+            exists = os.path.isfile(p) if p else False
+            status = 'OK' if exists else 'MISSING!'
+            print(f"  [{idx}] model ({a}) -> {p} [{status}]")
+    print(f"{'='*60}\n")
+
     opp_str = f"{num_training_opponents} training opponents (builtin + pool)" if round_based else (f"{num_training_opponents} opponents" if training_opponent_triples else "mix (weak/strong)")
     print(f"Training on {device} | Algo: {args.algo.upper()} | Reward: {args.reward_mode} | Opponents: {opp_str}")
 
@@ -278,6 +295,22 @@ def train_parallel(args):
             opponent_types.append('weak' if i < nw else 'strong')
             opponent_paths.append(None)
             opponent_algos_per_env.append(None)
+
+    # --- Debug: print per-env opponent assignment ---
+    print(f"\n{'='*60}")
+    print(f"ENV OPPONENT ASSIGNMENTS ({args.num_envs} parallel envs)")
+    print(f"{'='*60}")
+    for i in range(args.num_envs):
+        t = opponent_types[i]
+        p = opponent_paths[i]
+        a = opponent_algos_per_env[i]
+        if t in ('weak', 'strong'):
+            print(f"  Env {i}: {t} (builtin)")
+        else:
+            exists = os.path.isfile(p) if p else False
+            status = 'OK' if exists else 'MISSING!'
+            print(f"  Env {i}: model ({a}) -> {os.path.basename(p) if p else 'None'} [{status}]")
+    print(f"{'='*60}\n")
 
     project = getattr(args, 'wandb_project', None) or 'hockey-rounds'
     if args.wandb and wandb:
@@ -311,6 +344,20 @@ def train_parallel(args):
             eval_envs.append((f"S{i}", make_env('strong', 900 + i, reward_mode='default')()))
         else:
             eval_envs.append((os.path.basename(path) if path else f"M{i}", make_env('model', 900 + i, path, reward_mode='default', opponent_algo=algo or 'sac')()))
+
+    # --- Debug: print evaluation opponent assignments ---
+    print(f"\n{'='*60}")
+    print(f"EVALUATION OPPONENTS ({len(eval_envs)} envs, NOT used for training)")
+    print(f"{'='*60}")
+    for idx, (label, _) in enumerate(eval_envs):
+        t, path, algo = eval_triples[idx]
+        if t in ('weak', 'strong'):
+            print(f"  Eval {idx}: {label} -> {t} (builtin)")
+        else:
+            exists = os.path.isfile(path) if path else False
+            status = 'OK' if exists else 'MISSING!'
+            print(f"  Eval {idx}: {label} -> model ({algo}) {path} [{status}]")
+    print(f"{'='*60}\n")
 
     dummy_obs = envs.single_observation_space.sample()
     obs_dim = dummy_obs.shape[0]
@@ -429,13 +476,9 @@ def train_parallel(args):
                 avg_loss_rate, avg_reward = 1.0, 0.0
                 eval_loss_rates = []
             else:
-                total_eps = 100
-                per_env = max(1, total_eps // n_eval)
-                remainder = total_eps - per_env * n_eval
                 rewards, winrates = [], []
                 for j, (label, ev) in enumerate(eval_envs):
-                    eps = per_env + (1 if j < remainder else 0)
-                    r_m, w_m = evaluate(agent, ev, eps)
+                    r_m, w_m = evaluate(agent, ev, 50)
                     rewards.append(r_m)
                     winrates.append(w_m)
                 avg_reward = np.mean(rewards)
