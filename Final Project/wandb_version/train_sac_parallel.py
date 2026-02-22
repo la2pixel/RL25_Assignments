@@ -177,7 +177,12 @@ def make_env(opponent_type, rank=0, opponent_model_path=None, reward_mode='defau
             obs_dim = raw_env.observation_space.shape[0]
             action_dim = raw_env.action_space.shape[0] // 2
             if opponent_algo == 'td3':
-                op_agent = TD3Agent(state_dim=obs_dim, action_dim=action_dim, hidden_sizes=(512, 512))
+                op_agent = TD3Agent(
+                state_dim=obs_dim, action_dim=action_dim,
+                hidden_sizes=[getattr(args, 'hidden_size', 512), getattr(args, 'hidden_size', 512)],
+                dropout=getattr(args, 'dropout', 0.0),
+                weight_decay=getattr(args, 'weight_decay', 0.0),
+            )
                 try:
                     op_agent.load(opponent_model_path)
                 except Exception:
@@ -379,6 +384,18 @@ def train_parallel(args):
         noise_beta=args.noise_beta,
     )
 
+    # Round-based: save as [algo]-[reward_mode]-r[round].pth so downloaded artifacts have descriptive names
+    slot = getattr(args, 'slot', None)
+    round_num = getattr(args, 'round', None)
+    if slot and round_num is not None:
+        best_name = f"{slot}-r{round_num}.pth"
+        latest_name = f"{slot}-r{round_num}-latest.pth"
+        final_name = f"{slot}-r{round_num}-final.pth"
+    else:
+        best_name = "sac_hockey_best.pth"
+        latest_name = "sac_hockey_latest.pth"
+        final_name = "sac_hockey_final.pth"
+
     if args.load_model:
         try:
             agent.load(args.load_model)
@@ -520,18 +537,18 @@ def train_parallel(args):
 
             if avg_reward > best_eval_metric:
                 best_eval_metric = avg_reward
-                agent.save(os.path.join(args.save_dir, "sac_hockey_best.pth"))
+                agent.save(os.path.join(args.save_dir, best_name))
                 print(f"  >>> NEW BEST MODEL! <<<")
 
-            agent.save(os.path.join(args.save_dir, "sac_hockey_latest.pth"))
+            agent.save(os.path.join(args.save_dir, latest_name))
 
     envs.close()
     eval_env_weak.close()
     eval_env_strong.close()
     for ev in eval_env_models:
         ev.close()
-    best_path = os.path.join(args.save_dir, "sac_hockey_best.pth")
-    agent.save(os.path.join(args.save_dir, "sac_hockey_final.pth"))
+    best_path = os.path.join(args.save_dir, best_name)
+    agent.save(os.path.join(args.save_dir, final_name))
 
     # Round-based: head-to-head vs previous best, then upload or mark finished
     if getattr(args, 'slot', None) and pool is not None and args.wandb and wandb:
@@ -539,7 +556,7 @@ def train_parallel(args):
         entity = getattr(args, 'entity', None)
         project = getattr(args, 'wandb_project', 'hockey-rounds')
         if not os.path.isfile(best_path):
-            best_path = os.path.join(args.save_dir, "sac_hockey_final.pth")
+            best_path = os.path.join(args.save_dir, final_name)
         try:
             art = wandb.Api().artifact(f"{entity}/{project}/{slot}-best:best")
             prev_root = art.download()

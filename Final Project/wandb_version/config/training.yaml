@@ -58,6 +58,15 @@ training:
   policy_delay: 2
   # Network size (TD3 and SAC)
   hidden_size: 512
+  # TD3 regularization and decay (dropout 0 = off; weight_decay 0 = off)
+  dropout: 0.0
+  weight_decay: 0.0
+  # TD3 improvement bundle: when true, enables dropout + weight_decay + linear decay of policy_noise, dropout, weight_decay (schedule from total_timesteps)
+  improvement: false
+  # Optional overrides when improvement=false: linear decay end values (policy_noise->policy_noise_end, etc.); schedule_total_updates is computed from total_timesteps/learning_starts/update_ratio
+  # policy_noise_end: 0.05
+  # dropout_end: 0.0
+  # weight_decay_end: 0.0
   # SAC defaults (only used if algo: sac)
   actor_learning_rate: 3.0e-4
   critic_learning_rate: 3.0e-4

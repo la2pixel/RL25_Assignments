@@ -488,6 +488,119 @@ def read_pool_keys_with_registered_run(entity, project, round_n=None):
     return keys
 
 
+def read_pool_keys_by_worker_merged(entity, project, round_n=None):
+    """Return {worker_id: pool_key} by merging all versions of round-worker-runs-{n}.
+    Used by coordinator to map each registered run to its pool key for the three-list state."""
+    round_n = _resolve_round(entity, project, round_n)
+    api = _api(entity, project)
+    art_name = _worker_run_registry_artifact_name(round_n)
+    merged = {}
+    try:
+        for art in api.artifacts(type_name="config", name=f"{entity}/{project}/{art_name}", per_page=50):
+            for wid, pk in _pool_keys_by_worker_from_artifact(art).items():
+                if pk and wid not in merged:
+                    merged[wid] = pk
+    except Exception:
+        pass
+    return merged
+
+
+def _round_pool_state_artifact_name(round_n):
+    return f"round-{round_n}-pool-state"
+
+
+def read_round_pool_state(entity, project, round_n=None):
+    """Read the three-list state for this round (not_started, running, finished). Coordinator is sole writer.
+    Returns (not_started_list, running_list, finished_list) or (None, None, None) if artifact missing."""
+    round_n = _resolve_round(entity, project, round_n)
+    api = _api(entity, project)
+    name = _round_pool_state_artifact_name(round_n)
+    try:
+        art = api.artifact(f"{entity}/{project}/{name}:latest")
+        if hasattr(art, "metadata") and art.metadata:
+            m = art.metadata
+            return (
+                list(m.get("not_started", [])),
+                list(m.get("running", [])),
+                list(m.get("finished", [])),
+            )
+        root = art.download()
+        path = os.path.join(root, "pool_state.json")
+        if os.path.isfile(path):
+            with open(path) as f:
+                d = json.load(f)
+            return (
+                list(d.get("not_started", [])),
+                list(d.get("running", [])),
+                list(d.get("finished", [])),
+            )
+    except Exception:
+        pass
+    return (None, None, None)
+
+
+def write_round_pool_state(entity, project, round_n, not_started, running, finished):
+    """Coordinator only: write the three-list state for this round. Each spec appears in exactly one list."""
+    import wandb
+    round_n = _resolve_round(entity, project, round_n)
+    name = _round_pool_state_artifact_name(round_n)
+    run = wandb.run
+    if run is None:
+        run = wandb.init(project=project, entity=entity, job_type="coordinator")
+    art = wandb.Artifact(name, type="config")
+    art.metadata["not_started"] = list(not_started)
+    art.metadata["running"] = list(running)
+    art.metadata["finished"] = list(finished)
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        json.dump({"not_started": list(not_started), "running": list(running), "finished": list(finished)}, f)
+        f.flush()
+        art.add_file(f.name, "pool_state.json")
+    try:
+        os.unlink(f.name)
+    except Exception:
+        pass
+    run.log_artifact(art, aliases=["latest"])
+
+
+# Run states that mean the spec is still "running" (active). Crashed/killed/failed go back to not_started.
+_ACTIVE_RUN_STATES = frozenset({"running", "pending"})
+
+
+def compute_round_pool_state(entity, project, round_n, pool_keys):
+    """Compute (not_started, running, finished) from run registry and run state. Each key in exactly one list.
+    Crashed/killed/failed runs are treated as not_started so another worker can pick up the spec.
+    For old rounds (no pool_key in registry), falls back to the old finished-pool-round-{n} artifact so progress is preserved."""
+    round_n = _resolve_round(entity, project, round_n)
+    registry = read_worker_run_registry(entity, project, round_n)
+    pool_keys_by_worker = read_pool_keys_by_worker_merged(entity, project, round_n)
+    # Read old finished list first so we don't treat already-finished keys as "running" when a later run registers
+    old_finished_raw = read_finished_pool_keys_curated(entity, project, round_n) or read_finished_pool_keys_merged(entity, project, round_n)
+    old_finished_set = set(old_finished_raw or [])
+    finished_from_registry = set()
+    running_set = set()
+    for wid, pk in pool_keys_by_worker.items():
+        run_path = registry.get(wid)
+        state = get_run_state(run_path) if run_path else None
+        if state == "finished":
+            finished_from_registry.add(pk)
+        elif state in _ACTIVE_RUN_STATES:
+            if pk not in old_finished_set:
+                running_set.add(pk)
+    if not pool_keys_by_worker:
+        # No registry data for this round → treat as old round: finished from old artifact, rest not_started
+        finished = list(old_finished_raw) if old_finished_raw else []
+        not_started = [k for k in pool_keys if k not in finished]
+        return (not_started, [], finished)
+    # Merge: finished = from registry + any from old artifact not in running (each key in exactly one list)
+    finished_set = set(finished_from_registry)
+    for k in (old_finished_raw or []):
+        if k not in running_set:
+            finished_set.add(k)
+    running_set -= finished_set  # key can't be both finished and running
+    not_started = [k for k in pool_keys if k not in finished_set and k not in running_set]
+    return (not_started, sorted(running_set), sorted(finished_set))
+
+
 def register_worker_run(entity, project, round_n, worker_id, run_path, pool_key=None):
     """Training run calls this after wandb.init(): register worker_id -> run_path so coordinator can check run state.
     If pool_key is provided, it is stored so coordinator can filter finished list to only keys with a registered run."""

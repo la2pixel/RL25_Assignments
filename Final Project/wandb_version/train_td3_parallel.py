@@ -177,7 +177,12 @@ def make_env(opponent_type, rank=0, opponent_model_path=None, reward_mode='defau
             obs_dim = raw_env.observation_space.shape[0]
             action_dim = raw_env.action_space.shape[0] // 2
             if opponent_algo == 'td3':
-                op_agent = TD3Agent(state_dim=obs_dim, action_dim=action_dim, hidden_sizes=(512, 512))
+                op_agent = TD3Agent(
+                    state_dim=obs_dim, action_dim=action_dim,
+                    hidden_sizes=[getattr(args, 'hidden_size', 512), getattr(args, 'hidden_size', 512)],
+                    dropout=getattr(args, 'dropout', 0.0),
+                    weight_decay=getattr(args, 'weight_decay', 0.0),
+                )
                 try:
                     op_agent.load(opponent_model_path)
                 except Exception:
@@ -364,6 +369,12 @@ def train_parallel(args):
     action_dim = envs.single_action_space.shape[0] // 2
 
     hidden = getattr(args, 'hidden_size', 512)
+    dropout = getattr(args, 'dropout', 0.0)
+    weight_decay = getattr(args, 'weight_decay', 0.0)
+    improvement = getattr(args, 'improvement', False)
+    schedule_total_updates = None
+    if improvement or getattr(args, 'policy_noise_end', None) is not None or getattr(args, 'dropout_end', None) is not None or getattr(args, 'weight_decay_end', None) is not None:
+        schedule_total_updates = int((args.total_timesteps - args.learning_starts) * args.update_ratio)
     agent = TD3Agent(
         state_dim=obs_dim,
         action_dim=action_dim,
@@ -375,9 +386,28 @@ def train_parallel(args):
         policy_noise=args.policy_noise,
         noise_clip=args.noise_clip,
         policy_delay=args.policy_delay,
-        hidden_sizes=(hidden, hidden),
+        hidden_sizes=[hidden, hidden],
+        dropout=dropout,
+        weight_decay=weight_decay,
+        schedule_total_updates=schedule_total_updates,
+        policy_noise_end=getattr(args, 'policy_noise_end', None),
+        dropout_end=getattr(args, 'dropout_end', None),
+        weight_decay_end=getattr(args, 'weight_decay_end', None),
+        improvement=improvement,
     )
     device = agent.device
+
+    # Round-based: save as [algo]-[reward_mode]-r[round].pth so downloaded artifacts have descriptive names
+    slot = getattr(args, 'slot', None)
+    round_num = getattr(args, 'round', None)
+    if slot and round_num is not None:
+        best_name = f"{slot}-r{round_num}.pth"
+        latest_name = f"{slot}-r{round_num}-latest.pth"
+        final_name = f"{slot}-r{round_num}-final.pth"
+    else:
+        best_name = "td3_hockey_best.pth"
+        latest_name = "td3_hockey_latest.pth"
+        final_name = "td3_hockey_final.pth"
 
     if args.load_model:
         try:
@@ -496,18 +526,18 @@ def train_parallel(args):
 
             if avg_reward > best_eval_metric:
                 best_eval_metric = avg_reward
-                agent.save(os.path.join(args.save_dir, "td3_hockey_best.pth"))
+                agent.save(os.path.join(args.save_dir, best_name))
                 print(f"  >>> NEW BEST MODEL! <<<")
 
-            agent.save(os.path.join(args.save_dir, "td3_hockey_latest.pth"))
+            agent.save(os.path.join(args.save_dir, latest_name))
 
     envs.close()
     eval_env_weak.close()
     eval_env_strong.close()
     for ev in eval_env_models:
         ev.close()
-    best_path = os.path.join(args.save_dir, "td3_hockey_best.pth")
-    agent.save(os.path.join(args.save_dir, "td3_hockey_final.pth"))
+    best_path = os.path.join(args.save_dir, best_name)
+    agent.save(os.path.join(args.save_dir, final_name))
 
     # Round-based: head-to-head vs previous best, then upload or mark finished
     if getattr(args, 'slot', None) and pool is not None and args.wandb and wandb:
@@ -515,7 +545,7 @@ def train_parallel(args):
         entity = getattr(args, 'entity', None)
         project = getattr(args, 'wandb_project', 'hockey-rounds')
         if not os.path.isfile(best_path):
-            best_path = os.path.join(args.save_dir, "td3_hockey_final.pth")
+            best_path = os.path.join(args.save_dir, final_name)
         # Check if previous best exists for this slot
         try:
             art = wandb.Api().artifact(f"{entity}/{project}/{slot}-best:best")
@@ -567,6 +597,12 @@ if __name__ == "__main__":
     parser.add_argument('--noise_clip', type=float, default=0.5)
     parser.add_argument('--policy_delay', type=int, default=2)
     parser.add_argument('--hidden_size', type=int, default=512, help='Actor/critic hidden layer size (default 512, same as SAC)')
+    parser.add_argument('--dropout', type=float, default=0.0, help='Dropout probability after hidden layers (0 = off)')
+    parser.add_argument('--weight_decay', type=float, default=0.0, help='L2 weight decay for Adam (0 = off)')
+    parser.add_argument('--improvement', action='store_true', help='TD3 improvement bundle: dropout=0.1, weight_decay=1e-5, linear decay policy_noise->0.05, dropout->0, weight_decay->0')
+    parser.add_argument('--policy_noise_end', type=float, default=None, help='End value for linear decay of policy_noise (optional)')
+    parser.add_argument('--dropout_end', type=float, default=None, help='End value for linear decay of dropout (optional)')
+    parser.add_argument('--weight_decay_end', type=float, default=None, help='End value for linear decay of weight_decay (optional)')
 
     # Opponents
     parser.add_argument('--opponent', type=str, default='mix')

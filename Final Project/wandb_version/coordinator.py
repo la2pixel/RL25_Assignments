@@ -66,13 +66,17 @@ def main():
         settings = None
     wandb.init(project=project, entity=entity, name="coordinator", job_type="coordinator", config={"pool_keys": pool_keys}, tags=["system", "coordinator"], settings=settings)
 
-    # Infer which round to start from: read wandb trigger + finished-pool (no start_round parameter)
+    # Infer which round to start from: read wandb trigger + three-list pool state (not_started, running, finished)
     try:
         trigger = pool.read_round_trigger(entity, project)
     except Exception:
         trigger = {}
     trigger_round = trigger.get("round", 0)
-    finished = pool.read_finished_pool_keys_merged_filtered(entity, project, trigger_round) if trigger_round > 0 else []
+    # Use computed state for both the decision and the message (same source as the loop)
+    if trigger_round > 0:
+        not_started, running, finished = pool.compute_round_pool_state(entity, project, trigger_round, pool_keys)
+    else:
+        not_started, running, finished = None, None, []
     stop_requested = False
     if trigger_round == 0 or len(finished) >= len(pool_keys):
         start_round = trigger_round + 1 if trigger_round > 0 else 1
@@ -92,12 +96,14 @@ def main():
                         os.remove(stop_after_round_file)
                     except Exception:
                         pass
-                # Process key requests so workers get assigned while we wait (same as main round loop)
+                # Compute three-list state from registry + run state; write to wandb; use for all logic
+                not_started, running, finished = pool.compute_round_pool_state(entity, project, trigger_round, pool_keys)
+                pool.write_round_pool_state(entity, project, trigger_round, not_started, running, finished)
+                # Process key requests so workers get assigned while we wait
                 requests = pool.read_key_requests_merged(entity, project, trigger_round)
                 assignments = pool.read_key_assignments(entity, project, trigger_round)
                 timestamps = pool.read_assignment_timestamps(entity, project, trigger_round)
                 registry = pool.read_worker_run_registry(entity, project, trigger_round)
-                finished = pool.read_finished_pool_keys_merged_filtered(entity, project, trigger_round)
                 now = time.time()
                 timeout_sec = assignment_timeout_hours * 3600
                 stale = []
@@ -136,11 +142,11 @@ def main():
                 if len(finished) >= len(pool_keys):
                     print(f"Round {trigger_round} complete. Starting from round {start_round}.")
                     break
-                # Periodic progress so the coordinator doesn't appear stuck
+                # Periodic progress
                 now = time.time()
                 if now - last_resume_log >= 60:
-                    waiting_for = [k for k in pool_keys if k not in finished]
-                    print(f"Round {trigger_round}: {len(finished)}/{len(pool_keys)} finished. Still waiting for: {waiting_for}")
+                    waiting_for = not_started + running
+                    print(f"Round {trigger_round}: {len(finished)}/{len(pool_keys)} finished. not_started={not_started} running={running}")
                     last_resume_log = now
             except Exception as e:
                 print(f"Error: {e}")
@@ -152,17 +158,20 @@ def main():
     if not stop_requested:
         for round_n in range(start_round, max_rounds + 1):
             pool.clear_finished_pool_keys(entity, project, round_n)
-            finished = pool.read_finished_pool_keys_merged_filtered(entity, project, round_n)
-            if len(finished) >= len(pool_keys):
-                print("All pool keys are finished. Exiting.")
-                break
+            # Use three-list state: not_started, running, finished (coordinator is sole writer)
+            not_started, running, finished = pool.read_round_pool_state(entity, project, round_n)
+            if finished is not None and len(finished) >= len(pool_keys):
+                print(f"Round {round_n} already complete ({len(finished)}/{len(pool_keys)}), skipping to next round.")
+                continue
 
-            active = [k for k in pool_keys if k not in finished]
+            active = [k for k in pool_keys if k not in (finished or [])]
             print(f"Round {round_n}: pool_keys {pool_keys} | active {active}")
 
             pool.write_round_trigger(entity, project, round_n, pool_keys, builtin_opponents, [])
+            # Initial three-list state for this round: all not_started
+            pool.write_round_pool_state(entity, project, round_n, list(pool_keys), [], [])
 
-            # Wait until all active pool keys are finished; meanwhile process key requests and assign one key per worker
+            # Wait until all pool keys are finished; compute state from registry + run state each poll
             deadline = time.time() + timeout_hours * 3600
             last_log = 0
             while time.time() < deadline:
@@ -174,12 +183,13 @@ def main():
                             os.remove(stop_after_round_file)
                         except Exception:
                             pass
-                    # Process key requests: merge all artifact versions so we see every worker (no lost concurrent appends)
+                    # Compute and write three-list state (not_started, running, finished)
+                    not_started, running, finished = pool.compute_round_pool_state(entity, project, round_n, pool_keys)
+                    pool.write_round_pool_state(entity, project, round_n, not_started, running, finished)
                     requests = pool.read_key_requests_merged(entity, project, round_n)
                     assignments = pool.read_key_assignments(entity, project, round_n)
                     timestamps = pool.read_assignment_timestamps(entity, project, round_n)
                     registry = pool.read_worker_run_registry(entity, project, round_n)
-                    finished = pool.read_finished_pool_keys_merged_filtered(entity, project, round_n)
                     now = time.time()
                     timeout_sec = assignment_timeout_hours * 3600
                     stale = []
@@ -216,17 +226,15 @@ def main():
                         for wid, pk in list(assignments.items())[n_before:]:
                             print(f"[Round {round_n}] Assigned worker {wid[:8]}... -> {pk}")
 
-                    done_count = sum(1 for k in active if k in finished)
-                    if done_count >= len(active):
-                        print(f"Round {round_n} complete: all {len(active)} pool keys finished.")
+                    if len(finished) >= len(pool_keys):
+                        print(f"Round {round_n} complete: all {len(pool_keys)} pool keys finished.")
                         break
                     now = time.time()
                     if now - last_log >= 60:
-                        waiting_for = [k for k in active if k not in finished]
-                        if done_count > 0:
-                            print(f"Round {round_n}: {done_count}/{len(active)} pool keys finished. Still waiting for: {waiting_for}")
+                        if len(finished) > 0:
+                            print(f"Round {round_n}: {len(finished)}/{len(pool_keys)} finished. not_started={not_started} running={running}")
                         else:
-                            print(f"Round {round_n}: waiting for workers (0/{len(active)} finished). Need: {waiting_for}. Start workers on this or another machine with the same project/entity.")
+                            print(f"Round {round_n}: waiting for workers (0/{len(pool_keys)} finished). not_started={not_started} running={running}")
                         last_log = now
                 except Exception as e:
                     print(f"Error: {e}")

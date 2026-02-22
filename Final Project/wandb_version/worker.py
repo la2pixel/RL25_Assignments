@@ -102,33 +102,53 @@ def main():
                 )
                 sys.exit(1)
             pool_key = dedicated_pool_key
-            # Use merged finished list (same as coordinator) so we don't skip when :latest is stale (e.g. after a deleted run)
-            finished_this_round = pool.read_finished_pool_keys_merged_filtered(args.entity, args.project, current_round)
-            if pool_key in finished_this_round:
-                last_round_done = current_round
+            # We already completed this round in this process; skip so we don't re-run before coordinator updates the artifact
+            if current_round == last_round_done:
+                print(f"[Round {current_round}] Already done by this worker (dedicated {pool_key}). Waiting for next round (every {args.poll_interval}s).")
                 time.sleep(args.poll_interval)
                 continue
+            # Use three-list state (not_started, running, finished) from coordinator; spec in exactly one list
+            not_started, running, finished = pool.read_round_pool_state(args.entity, args.project, current_round)
+            if finished is not None:
+                if pool_key in finished:
+                    last_round_done = current_round
+                    time.sleep(args.poll_interval)
+                    continue
+            else:
+                # Fallback if no pool-state artifact yet (e.g. old round or old coordinator); use raw merge so workers that didn't register with pool_key still see themselves as finished
+                if pool_key in pool.read_finished_pool_keys_merged(args.entity, args.project, current_round):
+                    last_round_done = current_round
+                    time.sleep(args.poll_interval)
+                    continue
         else:
             if current_round == last_round_done:
                 print(f"[Round {current_round}] Already done by this worker. Waiting for next round (every {args.poll_interval}s).")
                 time.sleep(args.poll_interval)
                 continue
 
-            finished = pool.read_finished_pool_keys_merged_filtered(args.entity, args.project, current_round)
-            if len(finished) >= len(pool_keys):
+            not_started, running, finished = pool.read_round_pool_state(args.entity, args.project, current_round)
+            if finished is not None and len(finished) >= len(pool_keys):
                 time.sleep(args.poll_interval)
                 continue
+            if finished is None:
+                finished = pool.read_finished_pool_keys_merged_filtered(args.entity, args.project, current_round)
+                if len(finished) >= len(pool_keys):
+                    time.sleep(args.poll_interval)
+                    continue
 
-            # Stagger requests so workers don't all request at once (avoids race where coordinator
-            # wasn't ready yet and both workers got the same key).
+            # Stagger requests so workers don't all request at once
             delay = random.uniform(2.0, 15.0)
             print(f"[Round {current_round}] Staggering key request by {delay:.1f}s to reduce collision.")
             time.sleep(delay)
-            # Re-check finished count after delay in case round completed
-            finished = pool.read_finished_pool_keys_merged_filtered(args.entity, args.project, current_round)
-            if len(finished) >= len(pool_keys):
+            not_started, running, finished = pool.read_round_pool_state(args.entity, args.project, current_round)
+            if finished is not None and len(finished) >= len(pool_keys):
                 time.sleep(args.poll_interval)
                 continue
+            if finished is None:
+                finished = pool.read_finished_pool_keys_merged_filtered(args.entity, args.project, current_round)
+                if len(finished) >= len(pool_keys):
+                    time.sleep(args.poll_interval)
+                    continue
 
             # Request a key; coordinator will assign one (sole writer of round-assignments)
             pool.append_key_request(args.entity, args.project, current_round, worker_id)

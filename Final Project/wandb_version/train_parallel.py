@@ -121,7 +121,12 @@ def make_env(opponent_type, rank=0, opponent_model_path=None, reward_mode='defau
             obs_dim = raw_env.observation_space.shape[0]
             action_dim = raw_env.action_space.shape[0] // 2
             if opponent_algo == 'td3':
-                op_agent = TD3Agent(state_dim=obs_dim, action_dim=action_dim, hidden_sizes=(512, 512))
+                op_agent = TD3Agent(
+                state_dim=obs_dim, action_dim=action_dim,
+                hidden_sizes=[getattr(args, 'hidden_size', 512), getattr(args, 'hidden_size', 512)],
+                dropout=getattr(args, 'dropout', 0.0),
+                weight_decay=getattr(args, 'weight_decay', 0.0),
+            )
             else:
                 op_agent = SAC(obs_dim=obs_dim, action_dim=action_dim, device="cpu", hidden_sizes=(512, 512))
             try:
@@ -286,12 +291,23 @@ def train_parallel(args):
 
     if args.algo == 'td3':
         hidden = getattr(args, 'hidden_size', 512)
+        dropout = getattr(args, 'dropout', 0.0)
+        weight_decay = getattr(args, 'weight_decay', 0.0)
+        improvement = getattr(args, 'improvement', False)
+        schedule_total_updates = None
+        if improvement or getattr(args, 'policy_noise_end', None) is not None or getattr(args, 'dropout_end', None) is not None or getattr(args, 'weight_decay_end', None) is not None:
+            schedule_total_updates = int((args.total_timesteps - args.learning_starts) * args.update_ratio)
         agent = TD3Agent(
             state_dim=obs_dim, action_dim=action_dim,
             gamma=args.gamma, polyak=args.polyak,
             policy_lr=args.policy_lr, critic_lr=args.critic_lr,
             act_noise_std=args.act_noise_std, policy_noise=args.policy_noise, noise_clip=args.noise_clip, policy_delay=args.policy_delay,
-            hidden_sizes=(hidden, hidden),
+            hidden_sizes=[hidden, hidden], dropout=dropout, weight_decay=weight_decay,
+            schedule_total_updates=schedule_total_updates,
+            policy_noise_end=getattr(args, 'policy_noise_end', None),
+            dropout_end=getattr(args, 'dropout_end', None),
+            weight_decay_end=getattr(args, 'weight_decay_end', None),
+            improvement=improvement,
         )
         best_name = "td3_hockey_best.pth"
         latest_name = "td3_hockey_latest.pth"
@@ -299,7 +315,7 @@ def train_parallel(args):
     else:
         agent = SAC(
             obs_dim=obs_dim, action_dim=action_dim, device=device,
-            hidden_sizes=(getattr(args, 'hidden_size', 512), getattr(args, 'hidden_size', 512)),
+            hidden_sizes=[getattr(args, 'hidden_size', 512), getattr(args, 'hidden_size', 512)],
             actor_lr=getattr(args, 'actor_learning_rate', 3e-4), critic_lr=getattr(args, 'critic_learning_rate', 3e-4),
             alpha_lr=getattr(args, 'alpha_learning_rate', 3e-4), tau=getattr(args, 'tau', 0.005),
             gamma=args.gamma, alpha=getattr(args, 'alpha', 0.2),
@@ -308,6 +324,13 @@ def train_parallel(args):
         best_name = "sac_hockey_best.pth"
         latest_name = "sac_hockey_latest.pth"
         final_name = "sac_hockey_final.pth"
+
+    # Round-based: save as [algo]-[reward_mode]-r[round].pth so downloaded artifacts have descriptive names
+    if round_based and pool_key and getattr(args, 'round', None) is not None:
+        r = args.round
+        best_name = f"{pool_key}-r{r}.pth"
+        latest_name = f"{pool_key}-r{r}-latest.pth"
+        final_name = f"{pool_key}-r{r}-final.pth"
 
     device = agent.device
     if args.load_model:
@@ -507,6 +530,12 @@ if __name__ == "__main__":
     parser.add_argument('--tau', type=float, default=0.005)
     parser.add_argument('--alpha', type=float, default=0.2)
     parser.add_argument('--hidden_size', type=int, default=512)
+    parser.add_argument('--dropout', type=float, default=0.0, help='TD3: dropout after hidden layers (0 = off)')
+    parser.add_argument('--weight_decay', type=float, default=0.0, help='TD3: L2 weight decay for Adam (0 = off)')
+    parser.add_argument('--improvement', action='store_true', help='TD3: improvement bundle (dropout, weight_decay, linear decay)')
+    parser.add_argument('--policy_noise_end', type=float, default=None)
+    parser.add_argument('--dropout_end', type=float, default=None)
+    parser.add_argument('--weight_decay_end', type=float, default=None)
     parser.add_argument('--pink_noise', action='store_true')
     parser.add_argument('--noise_beta', type=float, default=1.0)
     # Opponents (standalone mode only: when not using --round/--entity)
