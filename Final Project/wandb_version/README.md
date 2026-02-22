@@ -38,7 +38,7 @@ The **coordinator** reads `pool_keys` from the keys of `specs`, and uses `projec
 - **Pool key**: One agent in the pool, e.g. `td3-default` or `sac-attack`. Format: `{algo}-{reward_mode}`. Defined in config `specs`.
 - **Pool keys**: Taken from config by the coordinator (keys of `specs`); workers learn them from the round trigger and claim one at a time.
 - **Claiming**: Each worker polls the trigger, claims one available pool key, runs training (with hyperparams from config for that spec), then the key is marked finished. If no key is available and the round is not complete, the worker exits with an error (more workers than pool keys).
-- **Round 1**: No pool opponents (fair start); round 2+ each run trains vs builtin + pool, then 1v1 vs previous best for same pool key.
+- **Round 1**: No pool opponents (fair start); round 2+ each run trains vs builtin + pool, then uploads the new best and marks the pool key finished (no 1v1 evaluation).
 
 ## Prerequisites
 
@@ -145,8 +145,8 @@ Start the coordinator first, then both workers. Each worker claims one pool key 
 
 ## What you’ll see
 
-- **Round 1**: Each run logs `Round 1: no pool opponents (fair start for all agents). Training vs builtin only.` Then uploads the first best for that pool key (no 1v1).
-- **Round 2**: Each run downloads the pool (both specs), trains vs weak + strong + both pool agents (4 opponents). After training: 1v1 vs previous best for the same pool key; logs `[1v1] Result vs previous best: win rate X%. Model improved: True/False.` Then either uploads the new best or marks the pool key finished.
+- **Round 1**: Each run logs `Round 1: no previous best for {pool_key}; uploaded and marked finished.` Training vs builtin only; uploads the first best for that pool key.
+- **Round 2+**: Each run downloads the pool, trains vs weak + strong + pool agents. After training: uploads the new best and marks the pool key finished (no 1v1 evaluation).
 
 ## Files
 

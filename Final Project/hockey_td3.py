@@ -5,40 +5,51 @@ import numpy as np
 
 
 class Actor(nn.Module):
-    """Same arch as before; layers.0/layers.1/out so state_dict matches saved checkpoints."""
-    def __init__(self, state_dim, action_dim):
+    """Optional hidden_sizes and dropout; default (512,512) and dropout=0 match legacy checkpoints."""
+    def __init__(self, state_dim, action_dim, hidden_sizes=(512, 512), dropout=0.0):
         super(Actor, self).__init__()
-        self.layers = nn.ModuleList([
-            nn.Linear(state_dim, 512),
-            nn.Linear(512, 512),
-        ])
-        self.out = nn.Linear(512, action_dim)
+        sizes = [state_dim] + list(hidden_sizes)
+        self.layers = nn.ModuleList([nn.Linear(sizes[i], sizes[i + 1]) for i in range(len(sizes) - 1)])
+        self.out = nn.Linear(sizes[-1], action_dim)
+        self.dropout = nn.Dropout(p=dropout) if dropout > 0 else None
 
     def forward(self, state):
         x = state
         for layer in self.layers:
             x = F.relu(layer(x))
+            if self.dropout is not None:
+                x = self.dropout(x)
         return torch.tanh(self.out(x))
 
 
 class Critic(nn.Module):
-    """Same arch as before; layers.0/layers.1/out so state_dict matches saved checkpoints."""
-    def __init__(self, state_dim, action_dim):
+    def __init__(self, state_dim, action_dim, hidden_sizes=[512, 512], dropout=0.0):
         super(Critic, self).__init__()
-        self.layers = nn.ModuleList([
-            nn.Linear(state_dim + action_dim, 512),
-            nn.Linear(512, 512),
-        ])
-        self.out = nn.Linear(512, 1)
+        sizes = [state_dim + action_dim] + hidden_sizes
+        self.layers = nn.ModuleList([nn.Linear(sizes[i], sizes[i + 1]) for i in range(len(sizes) - 1)])
+        self.out = nn.Linear(sizes[-1], 1)
+        self.dropout = nn.Dropout(p=dropout) if dropout > 0 else None
 
     def forward(self, state, action):
         x = torch.hstack([state, action])
         for layer in self.layers:
             x = F.relu(layer(x))
+            if self.dropout is not None:
+                x = self.dropout(x)
         return self.out(x)
 
 
+def _linear_decay(progress, start, end):
+    """Linear interpolation: start -> end as progress goes 0 -> 1."""
+    return start + (end - start) * progress
+
+
 class TD3Agent:
+    # When improvement=True we decay to these end values over the schedule
+    IMPROVEMENT_POLICY_NOISE_END = 0.05
+    IMPROVEMENT_DROPOUT_END = 0.0
+    IMPROVEMENT_WEIGHT_DECAY_END = 0.0
+
     def __init__(
         self,
         state_dim,
@@ -51,44 +62,50 @@ class TD3Agent:
         policy_noise=0.2,
         noise_clip=0.5,
         policy_delay=2,
+        hidden_sizes=[512, 512],
+        improvement=False,
+        dropout=0.1,
+        weight_decay=1e-5,
+        schedule_total_updates=None,
     ):
-        # check if gpu is available
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if improvement:
+            drop = dropout
+            wd = weight_decay
+            self.schedule_total_updates = schedule_total_updates or 1
+            self._policy_noise_start = policy_noise
+            self._dropout_start = dropout
+            self._weight_decay_start = weight_decay
+        else:
+            drop = 0.0
+            wd = 0.0
+            self.schedule_total_updates = None
+            self._policy_noise_start = self._dropout_start = self._weight_decay_start = None
 
-        # initializing networks
-        # main actor
-        self.actor = Actor(state_dim, action_dim).to(self.device)
-        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=policy_lr)
+        self.actor = Actor(state_dim, action_dim, hidden_sizes=hidden_sizes, dropout=drop).to(self.device)
+        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=policy_lr, weight_decay=wd)
 
-        # target actor
-        self.actor_target = Actor(state_dim, action_dim).to(self.device)
+        self.actor_target = Actor(state_dim, action_dim, hidden_sizes=hidden_sizes, dropout=drop).to(self.device)
         self.actor_target.load_state_dict(self.actor.state_dict())
 
-        # main critic1
-        self.critic1 = Critic(state_dim, action_dim).to(self.device)
-        self.critic1_optimizer = torch.optim.Adam(self.critic1.parameters(), lr=critic_lr)
+        self.critic1 = Critic(state_dim, action_dim, hidden_sizes=hidden_sizes, dropout=drop).to(self.device)
+        self.critic1_optimizer = torch.optim.Adam(self.critic1.parameters(), lr=critic_lr, weight_decay=wd)
 
-        # target critic1
-        self.critic1_target = Critic(state_dim, action_dim).to(self.device)
+        self.critic1_target = Critic(state_dim, action_dim, hidden_sizes=hidden_sizes, dropout=drop).to(self.device)
         self.critic1_target.load_state_dict(self.critic1.state_dict())
 
-        # main critic2
-        self.critic2 = Critic(state_dim, action_dim).to(self.device)
-        self.critic2_optimizer = torch.optim.Adam(self.critic2.parameters(), lr=critic_lr)
+        self.critic2 = Critic(state_dim, action_dim, hidden_sizes=hidden_sizes, dropout=drop).to(self.device)
+        self.critic2_optimizer = torch.optim.Adam(self.critic2.parameters(), lr=critic_lr, weight_decay=wd)
 
-        # target critic2
-        self.critic2_target = Critic(state_dim, action_dim).to(self.device)
+        self.critic2_target = Critic(state_dim, action_dim, hidden_sizes=hidden_sizes, dropout=drop).to(self.device)
         self.critic2_target.load_state_dict(self.critic2.state_dict())
 
-        # hyperparameters
         self.gamma = gamma
         self.polyak = polyak
         self.act_noise_std = act_noise_std
         self.policy_noise = policy_noise
         self.noise_clip = noise_clip
         self.policy_delay = policy_delay
-
-        # tracking
         self.total_updates = 0
 
         print(f"using device: {self.device}")
@@ -127,11 +144,32 @@ class TD3Agent:
             return action.flatten()
         return action
 
+    def _schedule(self):
+        """ AI USAGE: When improvement=True: linear decay of policy_noise, dropout, weight_decay to fixed end values."""
+        if self.schedule_total_updates is None or self.schedule_total_updates <= 0:
+            return
+        progress = min(1.0, self.total_updates / self.schedule_total_updates)
+        self.policy_noise = _linear_decay(progress, self._policy_noise_start, self.IMPROVEMENT_POLICY_NOISE_END)
+        drop_p = _linear_decay(progress, self._dropout_start, self.IMPROVEMENT_DROPOUT_END)
+        wd = _linear_decay(progress, self._weight_decay_start, self.IMPROVEMENT_WEIGHT_DECAY_END)
+        if self.actor.dropout is not None:
+            self.actor.dropout.p = drop_p
+            self.actor_target.dropout.p = drop_p
+        if self.critic1.dropout is not None:
+            self.critic1.dropout.p = drop_p
+            self.critic1_target.dropout.p = drop_p
+            self.critic2.dropout.p = drop_p
+            self.critic2_target.dropout.p = drop_p
+        for opt in (self.actor_optimizer, self.critic1_optimizer, self.critic2_optimizer):
+            for g in opt.param_groups:
+                g["weight_decay"] = wd
+
     def update(self, replay_buffer, batch_size):
         if len(replay_buffer) < batch_size:
             return
         observations, actions, rewards, next_observations, dones = replay_buffer.sample(batch_size)
         self.total_updates += 1
+        self._schedule()
 
         # computing target Q-Values
         with torch.no_grad():

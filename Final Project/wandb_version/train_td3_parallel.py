@@ -163,6 +163,34 @@ class ProvenRewardWrapper(gym.Wrapper):
 
 
 # ============================================================
+# Opponent resolution (model_dir + weak/strong/.pth names)
+# ============================================================
+
+def _resolve_opponents(names, model_dir):
+    """Resolve opponent list: weak/strong as-is; .pth names -> (path, algo) under model_dir. Returns list of (type, path, algo)."""
+    if not names:
+        return []
+    result = []
+    for name in names:
+        s = (name or "").strip()
+        if not s:
+            continue
+        if s.lower() == "weak":
+            result.append(("weak", None, None))
+        elif s.lower() == "strong":
+            result.append(("strong", None, None))
+        elif s.endswith(".pth") and model_dir:
+            path = os.path.join(model_dir, s)
+            algo = "td3" if "td3" in s.lower() else "sac"
+            result.append(("model", path, algo))
+        elif s.endswith(".pth"):
+            result.append(("model", os.path.abspath(s), "td3" if "td3" in s.lower() else "sac"))
+        else:
+            result.append(("weak", None, None))
+    return result
+
+
+# ============================================================
 # Env Factory
 # ============================================================
 
@@ -177,12 +205,7 @@ def make_env(opponent_type, rank=0, opponent_model_path=None, reward_mode='defau
             obs_dim = raw_env.observation_space.shape[0]
             action_dim = raw_env.action_space.shape[0] // 2
             if opponent_algo == 'td3':
-                op_agent = TD3Agent(
-                    state_dim=obs_dim, action_dim=action_dim,
-                    hidden_sizes=[getattr(args, 'hidden_size', 512), getattr(args, 'hidden_size', 512)],
-                    dropout=getattr(args, 'dropout', 0.0),
-                    weight_decay=getattr(args, 'weight_decay', 0.0),
-                )
+                op_agent = TD3Agent(state_dim=obs_dim, action_dim=action_dim)
                 try:
                     op_agent.load(opponent_model_path)
                 except Exception:
@@ -304,30 +327,26 @@ def train_parallel(args):
         builtin_opponents = [s.strip() for s in builtin_opponents.split(",") if s.strip()]
     if not builtin_opponents:
         builtin_opponents = ['weak', 'strong']
+
+    model_dir = getattr(args, 'model_dir', None) or args.save_dir
+    training_opponent_triples = _resolve_opponents(builtin_opponents, model_dir)
+    for p, a in zip(opponent_models, opponent_algos):
+        training_opponent_triples.append(("model", p, a if a else "sac"))
+    num_training_opponents = len(training_opponent_triples)
     reward_str = args.reward_mode.capitalize()
-    num_builtin = len(builtin_opponents)
-    opp_str = f"{len(opponent_models)} pool + {num_builtin} builtin ({','.join(builtin_opponents)})" if getattr(args, 'slot', None) else (f"{len(opponent_models)} models + weak/strong" if opponent_models else getattr(args, 'opponent', 'mix'))
-    print(f"Training on {device} | Mode: TD3 | Reward: {reward_str} | Opponents: {opp_str}" + (f" (={len(opponent_models) + num_builtin} total)" if getattr(args, 'slot', None) else ""))
+    print(f"Training on {device} | Mode: TD3 | Reward: {reward_str} | Opponents: {num_training_opponents} (builtin + pool)")
 
     # Build per-env opponent assignments
-    num_models = len(opponent_models)
     opponent_types = []
     opponent_paths = []
     opponent_algos_per_env = []
 
-    if num_models > 0 or builtin_opponents:
-        pool_list = list(builtin_opponents) + [f'model_{i}' for i in range(num_models)]
+    if training_opponent_triples:
         for i in range(args.num_envs):
-            assignment = pool_list[i % len(pool_list)]
-            if assignment in builtin_opponents:
-                opponent_types.append(assignment)
-                opponent_paths.append(None)
-                opponent_algos_per_env.append(None)
-            else:
-                model_idx = int(assignment.split('_')[1])
-                opponent_types.append('model')
-                opponent_paths.append(opponent_models[model_idx])
-                opponent_algos_per_env.append(opponent_algos[model_idx] if model_idx < len(opponent_algos) else 'sac')
+            t, p, a = training_opponent_triples[i % num_training_opponents]
+            opponent_types.append(t if t in ("weak", "strong") else "model")
+            opponent_paths.append(p)
+            opponent_algos_per_env.append(a)
     elif getattr(args, 'opponent', 'mix') == 'mix':
         num_weak = int(args.num_envs * 0.4)
         for i in range(args.num_envs):
@@ -354,27 +373,31 @@ def train_parallel(args):
         for i, (op, path, algo) in enumerate(zip(opponent_types, opponent_paths, opponent_algos_per_env))
     ])
 
-    # Eval envs: always raw reward
-    eval_env_weak = make_env('weak', 900, reward_mode='default')()
-    eval_env_strong = make_env('strong', 901, reward_mode='default')()
-    eval_env_models = []
-    for j, mp in enumerate(opponent_models):
-        algo = opponent_algos[j] if j < len(opponent_algos) else 'sac'
-        eval_env_models.append(
-            make_env('model', 902 + j, mp, reward_mode='default', opponent_algo=algo)()
-        )
+    # Eval envs: from evaluation_opponents only (unseen), resolved with model_dir
+    eval_opponent_names = getattr(args, 'evaluation_opponents', None) or ['weak', 'strong']
+    if isinstance(eval_opponent_names, str):
+        eval_opponent_names = [s.strip() for s in eval_opponent_names.split(",") if s.strip()]
+    if not eval_opponent_names:
+        eval_opponent_names = ['weak', 'strong']
+    eval_triples = _resolve_opponents(eval_opponent_names, model_dir)
+    eval_envs = []
+    for i, (t, path, algo) in enumerate(eval_triples):
+        if t == "weak":
+            eval_envs.append((f"W{i}", make_env('weak', 900 + i, reward_mode='default')()))
+        elif t == "strong":
+            eval_envs.append((f"S{i}", make_env('strong', 900 + i, reward_mode='default')()))
+        else:
+            eval_envs.append((os.path.basename(path) if path else f"M{i}", make_env('model', 900 + i, path, reward_mode='default', opponent_algo=algo or 'sac')()))
 
     dummy_obs = envs.single_observation_space.sample()
     obs_dim = dummy_obs.shape[0]
     action_dim = envs.single_action_space.shape[0] // 2
 
     hidden = getattr(args, 'hidden_size', 512)
-    dropout = getattr(args, 'dropout', 0.0)
-    weight_decay = getattr(args, 'weight_decay', 0.0)
     improvement = getattr(args, 'improvement', False)
-    schedule_total_updates = None
-    if improvement or getattr(args, 'policy_noise_end', None) is not None or getattr(args, 'dropout_end', None) is not None or getattr(args, 'weight_decay_end', None) is not None:
-        schedule_total_updates = int((args.total_timesteps - args.learning_starts) * args.update_ratio)
+    dropout = getattr(args, 'dropout', 0.1) if improvement else 0.0
+    weight_decay = getattr(args, 'weight_decay', 1e-5) if improvement else 0.0
+    schedule_total_updates = int((args.total_timesteps - args.learning_starts) * args.update_ratio) if improvement else None
     agent = TD3Agent(
         state_dim=obs_dim,
         action_dim=action_dim,
@@ -390,9 +413,6 @@ def train_parallel(args):
         dropout=dropout,
         weight_decay=weight_decay,
         schedule_total_updates=schedule_total_updates,
-        policy_noise_end=getattr(args, 'policy_noise_end', None),
-        dropout_end=getattr(args, 'dropout_end', None),
-        weight_decay_end=getattr(args, 'weight_decay_end', None),
         improvement=improvement,
     )
     device = agent.device
@@ -402,11 +422,9 @@ def train_parallel(args):
     round_num = getattr(args, 'round', None)
     if slot and round_num is not None:
         best_name = f"{slot}-r{round_num}.pth"
-        latest_name = f"{slot}-r{round_num}-latest.pth"
         final_name = f"{slot}-r{round_num}-final.pth"
     else:
         best_name = "td3_hockey_best.pth"
-        latest_name = "td3_hockey_latest.pth"
         final_name = "td3_hockey_final.pth"
 
     if args.load_model:
@@ -421,12 +439,12 @@ def train_parallel(args):
     obs, _ = envs.reset()
     total_steps = 0
     last_log_step = 0
-    best_eval_metric = -float('inf')
+    best_eval_metric = float('inf')  # best = lowest loss rate
     current_ep_rewards = np.zeros(args.num_envs)
     recent_rewards = deque(maxlen=100)
     os.makedirs(args.save_dir, exist_ok=True)
 
-    print(f"{'Step':>8} | {'SPS':>5} | {'Avg Reward':>10} | {'Best Metric':>10}")
+    print(f"{'Step':>8} | {'SPS':>5} | {'Avg Reward':>10} | {'Best Loss%':>10}")
 
     while total_steps < args.total_timesteps:
         if total_steps < args.learning_starts and not args.load_model:
@@ -465,114 +483,57 @@ def train_parallel(args):
             last_log_step = total_steps
             sps = int(total_steps / (time.time() - start_time))
             avg_rew = np.mean(recent_rewards) if recent_rewards else 0.0
-            print(f"{total_steps:8d} | {sps:5d} | {avg_rew:10.2f} | {best_eval_metric:10.2f}")
+            print(f"{total_steps:8d} | {sps:5d} | {avg_rew:10.2f} | {best_eval_metric:10.1%}")
 
         if total_steps % args.eval_freq < args.num_envs and total_steps >= args.learning_starts:
-            num_model_envs = len(eval_env_models)
-
-            if num_model_envs > 0:
-                total_eval = 100
-                per_builtin = total_eval // (2 + num_model_envs)
-                leftover = total_eval - per_builtin * (2 + num_model_envs)
-
-                r_w, w_w = evaluate(agent, eval_env_weak, per_builtin)
-                r_s, w_s = evaluate(agent, eval_env_strong, per_builtin)
-
-                model_rewards = []
-                model_winrates = []
-                for j, ev in enumerate(eval_env_models):
-                    eps = per_builtin + (1 if j < leftover else 0)
-                    r_m, w_m = evaluate(agent, ev, eps)
-                    model_rewards.append(r_m)
-                    model_winrates.append(w_m)
-                    if args.wandb and wandb:
-                        wandb.log({
-                            f"eval/win_rate_model_{j}": w_m,
-                            f"eval/reward_model_{j}": r_m,
-                        }, commit=False)
-
-                all_rewards = [r_w, r_s] + model_rewards
-                all_winrates = [w_w, w_s] + model_winrates
-                avg_winrate = np.mean(all_winrates)
-                avg_reward = np.mean(all_rewards)
-
-                if args.wandb and wandb:
-                    wandb.log({
-                        "eval/win_rate_weak": w_w, "eval/win_rate_strong": w_s,
-                        "eval/reward_weak": r_w, "eval/reward_strong": r_s,
-                    }, commit=False)
+            n_eval = len(eval_envs)
+            if n_eval == 0:
+                avg_loss_rate, avg_reward = 1.0, 0.0
+                eval_loss_rates = []
             else:
-                r_w, w_w = evaluate(agent, eval_env_weak, 40)
-                r_s, w_s = evaluate(agent, eval_env_strong, 60)
-
-                avg_winrate = (w_w * 0.40) + (w_s * 0.60)
-                avg_reward = (r_w * 0.40) + (r_s * 0.60)
-
-                if args.wandb and wandb:
-                    wandb.log({
-                        "eval/win_rate_weak": w_w, "eval/win_rate_strong": w_s,
-                        "eval/reward_weak": r_w, "eval/reward_strong": r_s,
-                    }, commit=False)
+                total_eps = 100
+                per_env = max(1, total_eps // n_eval)
+                remainder = total_eps - per_env * n_eval
+                rewards, winrates = [], []
+                for j, (label, ev) in enumerate(eval_envs):
+                    eps = per_env + (1 if j < remainder else 0)
+                    r_m, w_m = evaluate(agent, ev, eps)
+                    rewards.append(r_m)
+                    winrates.append(w_m)
+                avg_reward = np.mean(rewards)
+                avg_loss_rate = 1.0 - np.mean(winrates)
+                eval_loss_rates = [1.0 - w for w in winrates]
 
             if args.wandb and wandb:
                 wandb.log({
-                    "eval/overall_win_rate": avg_winrate,
+                    "eval/loss_rate": avg_loss_rate,
                     "eval/mean_reward": avg_reward,
                     "global_step": total_steps
                 })
-
-            print(f"  [EVAL @ {total_steps}] Reward: {avg_reward:.2f} | WinRate: {avg_winrate:.1%} | W:{w_w:.1%} S:{w_s:.1%}" +
-                  (f" M:{' '.join(f'{w:.1%}' for w in model_winrates)}" if num_model_envs > 0 else ""))
-
-            if avg_reward > best_eval_metric:
-                best_eval_metric = avg_reward
+            labels = [lab for lab, _ in eval_envs]
+            lr_str = " ".join(f"{lab}:{lr:.1%}" for lab, lr in zip(labels, eval_loss_rates)) if eval_loss_rates else ""
+            print(f"  [EVAL @ {total_steps}] Reward: {avg_reward:.2f} | LossRate: {avg_loss_rate:.1%} | {lr_str}")
+            if n_eval > 0 and avg_loss_rate < best_eval_metric:
+                best_eval_metric = avg_loss_rate
                 agent.save(os.path.join(args.save_dir, best_name))
                 print(f"  >>> NEW BEST MODEL! <<<")
 
-            agent.save(os.path.join(args.save_dir, latest_name))
-
     envs.close()
-    eval_env_weak.close()
-    eval_env_strong.close()
-    for ev in eval_env_models:
+    for _, ev in eval_envs:
         ev.close()
     best_path = os.path.join(args.save_dir, best_name)
     agent.save(os.path.join(args.save_dir, final_name))
+    if not os.path.isfile(best_path):
+        best_path = os.path.join(args.save_dir, final_name)
 
-    # Round-based: head-to-head vs previous best, then upload or mark finished
+    # Round-based: upload best model for this round (one per spec per round) and mark finished
     if getattr(args, 'slot', None) and pool is not None and args.wandb and wandb:
         slot = args.slot
         entity = getattr(args, 'entity', None)
         project = getattr(args, 'wandb_project', 'hockey-rounds')
-        if not os.path.isfile(best_path):
-            best_path = os.path.join(args.save_dir, final_name)
-        # Check if previous best exists for this slot
-        try:
-            art = wandb.Api().artifact(f"{entity}/{project}/{slot}-best:best")
-            prev_root = art.download()
-            prev_path = None
-            for f in os.listdir(prev_root):
-                if f.endswith(".pth"):
-                    prev_path = os.path.join(prev_root, f)
-                    break
-        except Exception:
-            prev_path = None
-        if prev_path is None:
-            pool.upload_best(entity, project, slot, best_path)
-            print(f"[Round] No previous best for {slot}; uploaded.")
-        else:
-            # Head-to-head: candidate (our best) vs previous best, 30 games
-            print(f"[1v1] Running 1v1 vs previous best (same spec '{slot}'): 30 games...")
-            eval_env = make_env('model', 0, prev_path, reward_mode='default', opponent_algo='td3' if slot.startswith('td3-') else 'sac')()
-            _, win_rate = evaluate(agent, eval_env, num_episodes=30)
-            eval_env.close()
-            print(f"[1v1] Result vs previous best: win rate {win_rate:.1%} (30 games).")
-            if win_rate > 0.5:
-                pool.upload_best(entity, project, slot, best_path)
-                print(f"[Round] {slot} beat previous best; saved new best and uploaded.")
-            else:
-                pool.mark_slot_finished(entity, project, slot)
-                print(f"[Round] {slot} did not beat previous best; slot marked finished (no upload).")
+        pool.upload_best(entity, project, slot, best_path)
+        pool.mark_slot_finished(entity, project, slot)
+        print(f"[Round] {slot} best uploaded and marked finished.")
 
 
 if __name__ == "__main__":
@@ -615,7 +576,9 @@ if __name__ == "__main__":
     parser.add_argument('--round', type=int, default=None, help='Current round number (required when --slot is set)')
     parser.add_argument('--slot', type=str, default=None, help='Slot name, e.g. td3-default (required for round-based)')
     parser.add_argument('--specs', type=str, default=None, help='comma-separated specs for this run (e.g. td3-default,td3-attack). Opponents = N + M builtin.')
-    parser.add_argument('--builtin_opponents', type=str, default='weak,strong', help='comma-separated built-in bots (e.g. weak,strong). Passed by coordinator/worker.')
+    parser.add_argument('--builtin_opponents', type=str, default='weak,strong', help='Training opponents: weak, strong, and/or .pth filenames (under model_dir).')
+    parser.add_argument('--model_dir', type=str, default=None, help='Root dir for .pth names (default: save_dir).')
+    parser.add_argument('--evaluation_opponents', type=str, nargs='*', default=None, help='Eval-only opponents: weak, strong, and/or .pth filenames (under model_dir).')
     parser.add_argument('--wandb_project', type=str, default='hockey-rounds', help='wandb project for round-based runs')
     parser.add_argument('--entity', type=str, default=None, help='wandb entity for round-based runs')
 

@@ -110,6 +110,33 @@ class ProvenRewardWrapper(gym.Wrapper):
         return obs, shaped, done, trunc, info
 
 
+def _resolve_opponents(names, model_dir):
+    """
+    Resolve opponent list: weak/strong stay as-is; .pth names become (path, algo) under model_dir.
+    Returns list of (opponent_type, path, algo): 'weak'|'strong'|'model', path or None, algo or None.
+    """
+    if not names:
+        return []
+    result = []
+    for name in names:
+        s = (name or "").strip()
+        if not s:
+            continue
+        if s.lower() == "weak":
+            result.append(("weak", None, None))
+        elif s.lower() == "strong":
+            result.append(("strong", None, None))
+        elif s.endswith(".pth") and model_dir:
+            path = os.path.join(model_dir, s)
+            algo = "td3" if "td3" in s.lower() else "sac"
+            result.append(("model", path, algo))
+        elif s.endswith(".pth"):
+            result.append(("model", os.path.abspath(s), "td3" if "td3" in s.lower() else "sac"))
+        else:
+            result.append(("weak", None, None))  # fallback
+    return result
+
+
 def make_env(opponent_type, rank=0, opponent_model_path=None, reward_mode='default', opponent_algo=None):
     def _thunk():
         raw_env = h_env.HockeyEnv()
@@ -121,12 +148,7 @@ def make_env(opponent_type, rank=0, opponent_model_path=None, reward_mode='defau
             obs_dim = raw_env.observation_space.shape[0]
             action_dim = raw_env.action_space.shape[0] // 2
             if opponent_algo == 'td3':
-                op_agent = TD3Agent(
-                state_dim=obs_dim, action_dim=action_dim,
-                hidden_sizes=[getattr(args, 'hidden_size', 512), getattr(args, 'hidden_size', 512)],
-                dropout=getattr(args, 'dropout', 0.0),
-                weight_decay=getattr(args, 'weight_decay', 0.0),
-            )
+                op_agent = TD3Agent(state_dim=obs_dim, action_dim=action_dim)
             else:
                 op_agent = SAC(obs_dim=obs_dim, action_dim=action_dim, device="cpu", hidden_sizes=(512, 512))
             try:
@@ -232,28 +254,24 @@ def train_parallel(args):
     if not builtin_opponents:
         builtin_opponents = ['weak', 'strong']
 
-    num_models = len(opponent_models)
-    num_builtin = len(builtin_opponents)
-    opp_str = f"{num_models} pool + {num_builtin} builtin ({','.join(builtin_opponents)})" if round_based else (f"{num_models} models + weak/strong" if opponent_models else "mix (weak/strong)")
-    print(f"Training on {device} | Algo: {args.algo.upper()} | Reward: {args.reward_mode} | Opponents: {opp_str}" + (f" (={num_models + num_builtin} total)" if round_based else ""))
+    model_dir = getattr(args, 'model_dir', None) or args.save_dir
+    training_opponent_triples = _resolve_opponents(builtin_opponents, model_dir)
+    for p, a in zip(opponent_models, opponent_algos):
+        training_opponent_triples.append(("model", p, a if a else "sac"))
+    num_training_opponents = len(training_opponent_triples)
+    opp_str = f"{num_training_opponents} training opponents (builtin + pool)" if round_based else (f"{num_training_opponents} opponents" if training_opponent_triples else "mix (weak/strong)")
+    print(f"Training on {device} | Algo: {args.algo.upper()} | Reward: {args.reward_mode} | Opponents: {opp_str}")
 
-    # Opponent assignment
+    # Opponent assignment: cycle over (type, path, algo)
     opponent_types = []
     opponent_paths = []
     opponent_algos_per_env = []
-    if num_models > 0 or builtin_opponents:
-        pool_list = list(builtin_opponents) + [f'model_{i}' for i in range(num_models)]
+    if training_opponent_triples:
         for i in range(args.num_envs):
-            a = pool_list[i % len(pool_list)]
-            if a in builtin_opponents:
-                opponent_types.append(a)
-                opponent_paths.append(None)
-                opponent_algos_per_env.append(None)
-            else:
-                idx = int(a.split('_')[1])
-                opponent_types.append('model')
-                opponent_paths.append(opponent_models[idx])
-                opponent_algos_per_env.append(opponent_algos[idx] if idx < len(opponent_algos) else 'sac')
+            t, p, a = training_opponent_triples[i % num_training_opponents]
+            opponent_types.append(t if t in ("weak", "strong") else "model")
+            opponent_paths.append(p)
+            opponent_algos_per_env.append(a)
     else:
         nw = int(args.num_envs * 0.4)
         for i in range(args.num_envs):
@@ -278,12 +296,21 @@ def train_parallel(args):
         make_env(op, i, path, reward_mode=args.reward_mode, opponent_algo=algo)
         for i, (op, path, algo) in enumerate(zip(opponent_types, opponent_paths, opponent_algos_per_env))
     ])
-    eval_env_weak = make_env('weak', 900, reward_mode='default')()
-    eval_env_strong = make_env('strong', 901, reward_mode='default')()
-    eval_env_models = [
-        make_env('model', 902 + j, mp, reward_mode='default', opponent_algo=opponent_algos[j] if j < len(opponent_algos) else 'sac')()
-        for j, mp in enumerate(opponent_models)
-    ]
+    # Evaluation opponents (unseen): from config, resolved with model_dir; not used for training
+    eval_opponent_names = getattr(args, 'evaluation_opponents', None) or ['weak', 'strong']
+    if isinstance(eval_opponent_names, str):
+        eval_opponent_names = [s.strip() for s in eval_opponent_names.split(",") if s.strip()]
+    if not eval_opponent_names:
+        eval_opponent_names = ['weak', 'strong']
+    eval_triples = _resolve_opponents(eval_opponent_names, model_dir)
+    eval_envs = []
+    for i, (t, path, algo) in enumerate(eval_triples):
+        if t == "weak":
+            eval_envs.append((f"W{i}", make_env('weak', 900 + i, reward_mode='default')()))
+        elif t == "strong":
+            eval_envs.append((f"S{i}", make_env('strong', 900 + i, reward_mode='default')()))
+        else:
+            eval_envs.append((os.path.basename(path) if path else f"M{i}", make_env('model', 900 + i, path, reward_mode='default', opponent_algo=algo or 'sac')()))
 
     dummy_obs = envs.single_observation_space.sample()
     obs_dim = dummy_obs.shape[0]
@@ -291,12 +318,10 @@ def train_parallel(args):
 
     if args.algo == 'td3':
         hidden = getattr(args, 'hidden_size', 512)
-        dropout = getattr(args, 'dropout', 0.0)
-        weight_decay = getattr(args, 'weight_decay', 0.0)
         improvement = getattr(args, 'improvement', False)
-        schedule_total_updates = None
-        if improvement or getattr(args, 'policy_noise_end', None) is not None or getattr(args, 'dropout_end', None) is not None or getattr(args, 'weight_decay_end', None) is not None:
-            schedule_total_updates = int((args.total_timesteps - args.learning_starts) * args.update_ratio)
+        dropout = getattr(args, 'dropout', 0.1) if improvement else 0.0
+        weight_decay = getattr(args, 'weight_decay', 1e-5) if improvement else 0.0
+        schedule_total_updates = int((args.total_timesteps - args.learning_starts) * args.update_ratio) if improvement else None
         agent = TD3Agent(
             state_dim=obs_dim, action_dim=action_dim,
             gamma=args.gamma, polyak=args.polyak,
@@ -304,13 +329,9 @@ def train_parallel(args):
             act_noise_std=args.act_noise_std, policy_noise=args.policy_noise, noise_clip=args.noise_clip, policy_delay=args.policy_delay,
             hidden_sizes=[hidden, hidden], dropout=dropout, weight_decay=weight_decay,
             schedule_total_updates=schedule_total_updates,
-            policy_noise_end=getattr(args, 'policy_noise_end', None),
-            dropout_end=getattr(args, 'dropout_end', None),
-            weight_decay_end=getattr(args, 'weight_decay_end', None),
             improvement=improvement,
         )
         best_name = "td3_hockey_best.pth"
-        latest_name = "td3_hockey_latest.pth"
         final_name = "td3_hockey_final.pth"
     else:
         agent = SAC(
@@ -322,14 +343,12 @@ def train_parallel(args):
             pink_noise=getattr(args, 'pink_noise', False), noise_beta=getattr(args, 'noise_beta', 1.0),
         )
         best_name = "sac_hockey_best.pth"
-        latest_name = "sac_hockey_latest.pth"
         final_name = "sac_hockey_final.pth"
 
-    # Round-based: save as [algo]-[reward_mode]-r[round].pth so downloaded artifacts have descriptive names
+    # Round-based: save best as [algo]-[reward_mode]-r[round].pth (one best per round, uploaded to wandb)
     if round_based and pool_key and getattr(args, 'round', None) is not None:
         r = args.round
         best_name = f"{pool_key}-r{r}.pth"
-        latest_name = f"{pool_key}-r{r}-latest.pth"
         final_name = f"{pool_key}-r{r}-final.pth"
 
     device = agent.device
@@ -348,11 +367,11 @@ def train_parallel(args):
     obs, _ = envs.reset()
     total_steps = 0
     last_log_step = 0
-    best_eval_metric = -float('inf')
+    best_eval_metric = float('inf')  # best = lowest loss rate
     current_ep_rewards = np.zeros(args.num_envs)
     recent_rewards = deque(maxlen=100)
     os.makedirs(args.save_dir, exist_ok=True)
-    print(f"{'Step':>8} | {'SPS':>5} | {'Avg Reward':>10} | {'Best Metric':>10}")
+    print(f"{'Step':>8} | {'SPS':>5} | {'Avg Reward':>10} | {'Best Loss%':>10}")
 
     while total_steps < args.total_timesteps:
         if total_steps < args.learning_starts and not args.load_model:
@@ -402,50 +421,46 @@ def train_parallel(args):
             last_log_step = total_steps
             sps = int(total_steps / (time.time() - start_time))
             avg_rew = np.mean(recent_rewards) if recent_rewards else 0.0
-            print(f"{total_steps:8d} | {sps:5d} | {avg_rew:10.2f} | {best_eval_metric:10.2f}")
+            print(f"{total_steps:8d} | {sps:5d} | {avg_rew:10.2f} | {best_eval_metric:10.1%}")
 
         if total_steps % args.eval_freq < args.num_envs and total_steps >= args.learning_starts:
-            if eval_env_models:
-                per_b = 100 // (2 + len(eval_env_models))
-                r_w, w_w = evaluate(agent, eval_env_weak, per_b)
-                r_s, w_s = evaluate(agent, eval_env_strong, per_b)
-                model_rewards = []
-                model_winrates = []
-                for j, ev in enumerate(eval_env_models):
-                    eps = per_b + (1 if j < 100 - per_b * (2 + len(eval_env_models)) else 0)
-                    r_m, w_m = evaluate(agent, ev, eps)
-                    model_rewards.append(r_m)
-                    model_winrates.append(w_m)
-                avg_winrate = np.mean([w_w, w_s] + model_winrates)
-                avg_reward = np.mean([r_w, r_s] + model_rewards)
+            n_eval = len(eval_envs)
+            if n_eval == 0:
+                avg_loss_rate, avg_reward = 1.0, 0.0
+                eval_loss_rates = []
             else:
-                r_w, w_w = evaluate(agent, eval_env_weak, 40)
-                r_s, w_s = evaluate(agent, eval_env_strong, 60)
-                avg_winrate = w_w * 0.4 + w_s * 0.6
-                avg_reward = r_w * 0.4 + r_s * 0.6
-                model_winrates = []
+                total_eps = 100
+                per_env = max(1, total_eps // n_eval)
+                remainder = total_eps - per_env * n_eval
+                rewards, winrates = [], []
+                for j, (label, ev) in enumerate(eval_envs):
+                    eps = per_env + (1 if j < remainder else 0)
+                    r_m, w_m = evaluate(agent, ev, eps)
+                    rewards.append(r_m)
+                    winrates.append(w_m)
+                avg_reward = np.mean(rewards)
+                avg_loss_rate = 1.0 - np.mean(winrates)
+                eval_loss_rates = [1.0 - w for w in winrates]
 
             if args.wandb and wandb:
-                wandb.log({"eval/overall_win_rate": avg_winrate, "eval/mean_reward": avg_reward, "global_step": total_steps})
-            print(f"  [EVAL @ {total_steps}] Reward: {avg_reward:.2f} | WinRate: {avg_winrate:.1%} | W:{w_w:.1%} S:{w_s:.1%}" + (f" M:{' '.join(f'{w:.1%}' for w in model_winrates)}" if model_winrates else ""))
-
-            if avg_reward > best_eval_metric:
-                best_eval_metric = avg_reward
+                wandb.log({"eval/loss_rate": avg_loss_rate, "eval/mean_reward": avg_reward, "global_step": total_steps})
+            labels = [lab for lab, _ in eval_envs]
+            lr_str = " ".join(f"{lab}:{lr:.1%}" for lab, lr in zip(labels, eval_loss_rates)) if eval_loss_rates else ""
+            print(f"  [EVAL @ {total_steps}] Reward: {avg_reward:.2f} | LossRate: {avg_loss_rate:.1%} | {lr_str}")
+            if n_eval > 0 and avg_loss_rate < best_eval_metric:
+                best_eval_metric = avg_loss_rate
                 agent.save(os.path.join(args.save_dir, best_name))
                 print("  >>> NEW BEST MODEL! <<<")
-            agent.save(os.path.join(args.save_dir, latest_name))
 
-            # Early stopping: 100% eval win rate
-            if avg_winrate >= 1.0:
+            # Early stopping: 0% loss rate (never lose)
+            if n_eval > 0 and avg_loss_rate <= 0.0:
                 if args.wandb and wandb:
-                    wandb.log({"train/early_stop": 1, "train/early_stop_reason": "eval_win_rate_100", "global_step": total_steps})
-                print(f"  [Early stop] Eval win rate reached 100% at step {total_steps}. Stopping training.")
+                    wandb.log({"train/early_stop": 1, "train/early_stop_reason": "eval_loss_rate_0", "global_step": total_steps})
+                print(f"  [Early stop] Eval loss rate reached 0% at step {total_steps}. Stopping training.")
                 break
 
     envs.close()
-    eval_env_weak.close()
-    eval_env_strong.close()
-    for ev in eval_env_models:
+    for _, ev in eval_envs:
         ev.close()
 
     best_path = os.path.join(args.save_dir, best_name)
@@ -453,47 +468,13 @@ def train_parallel(args):
     if not os.path.isfile(best_path):
         best_path = os.path.join(args.save_dir, final_name)
 
-    # Round-based: round 1 = upload first best only (no 1v1). Round 2+ = 1v1 vs previous best, then upload or mark finished
+    # Round-based: upload best model for this round (one per spec per round) and mark finished
     if round_based and pool_key and pool is not None and args.wandb and wandb:
         entity = getattr(args, 'entity', None)
         project = getattr(args, 'wandb_project', 'hockey-rounds')
-        round_one = getattr(args, 'round', 0) == 1
-        if round_one:
-            pool.upload_best(entity, project, pool_key, best_path)
-            pool.mark_pool_key_finished(entity, project, pool_key)
-            print(f"[Round] Round 1: no previous best for {pool_key}; uploaded and marked finished (no 1v1).")
-        else:
-            try:
-                art = wandb.Api().artifact(f"{entity}/{project}/{pool_key}-best:best")
-                prev_root = art.download()
-                prev_path = None
-                for f in os.listdir(prev_root):
-                    if f.endswith(".pth"):
-                        prev_path = os.path.join(prev_root, f)
-                        break
-            except Exception:
-                prev_path = None
-            if prev_path is None:
-                pool.upload_best(entity, project, pool_key, best_path)
-                pool.mark_pool_key_finished(entity, project, pool_key)
-                print(f"[Round] No previous best for {pool_key}; uploaded and marked finished.")
-            else:
-                n_1v1 = getattr(args, 'eval_1v1_games', 100)
-                print(f"[1v1] Running 1v1 vs previous best (same pool key '{pool_key}'): {n_1v1} games...")
-                eval_env = make_env('model', 0, prev_path, reward_mode='default', opponent_algo=args.algo)()
-                _, win_rate = evaluate(agent, eval_env, num_episodes=n_1v1)
-                eval_env.close()
-                # Log 1v1 result so it's visible in wandb (for both improved and not improved)
-                if args.wandb and wandb:
-                    wandb.log({"eval/1v1_vs_previous_best_win_rate": win_rate, "eval/1v1_model_improved": win_rate > 0.5})
-                print(f"[1v1] Result vs previous best: win rate {win_rate:.1%} ({n_1v1} games). Model improved: {win_rate > 0.5}.")
-                if win_rate > 0.5:
-                    pool.upload_best(entity, project, pool_key, best_path)
-                    pool.mark_pool_key_finished(entity, project, pool_key)
-                    print(f"[Round] {pool_key} beat previous best; new best uploaded and marked finished.")
-                else:
-                    pool.mark_pool_key_finished(entity, project, pool_key)
-                    print(f"[Round] {pool_key} did not beat previous best; marked finished (no upload).")
+        pool.upload_best(entity, project, pool_key, best_path)
+        pool.mark_pool_key_finished(entity, project, pool_key)
+        print(f"[Round] Round {getattr(args, 'round', 0)}: {pool_key} best uploaded and marked finished.")
 
 
 if __name__ == "__main__":
@@ -546,9 +527,10 @@ if __name__ == "__main__":
     # Round-based (pool keys come from coordinator via round trigger; this run's key = algo-reward_mode)
     parser.add_argument('--round', type=int, default=None)
     parser.add_argument('--entity', type=str, default=None)
-    parser.add_argument('--builtin_opponents', type=str, default='weak,strong')
+    parser.add_argument('--builtin_opponents', type=str, default='weak,strong', help='Training opponents: weak, strong, and/or .pth filenames (under model_dir)')
+    parser.add_argument('--model_dir', type=str, default=None, help='Root dir for .pth names in builtin_opponents / evaluation_opponents (default: save_dir)')
+    parser.add_argument('--evaluation_opponents', type=str, nargs='*', default=None, help='Eval-only opponents: weak, strong, and/or .pth filenames (under model_dir). Unseen during training.')
     parser.add_argument('--wandb_project', type=str, default='hockey-rounds')
-    parser.add_argument('--eval_1v1_games', type=int, default=100, help='Number of games for 1v1 vs previous best (round 2+). Default: 100')
     # Config-based: load hyperparams and algo/reward_mode from YAML (used by worker)
     parser.add_argument('--config', type=str, default=None, help='Path to training config YAML (with --pool_key loads full args for that spec)')
     parser.add_argument('--pool_key', type=str, default=None, help='Pool key (e.g. td3-default); with --config loads spec from config')

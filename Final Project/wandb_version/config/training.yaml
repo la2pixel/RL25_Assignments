@@ -4,15 +4,14 @@
 # Algo: td3 | sac
 # Reward modes: default | attack | defense | proven
 
-project: hockey-training
+project: hockey-training-phase2
 entity: meloneneis   # required: your wandb username (same on all machines)
-builtin_opponents: [weak, strong]
 
 coordinator:
   max_rounds: 100
   poll_interval: 60
   timeout_hours: 24
-  assignment_timeout_hours: 4   # free pool key if worker assigned but not finished for this long (crash recovery)
+  assignment_timeout_hours: 7   # free pool key if worker assigned but not finished for this long (crash recovery)
 
 worker:
   poll_interval: 30
@@ -27,17 +26,15 @@ dedicated_specs: True
 specs:
   - td3-default
   - td3-attack
-  - td3-proven
   - td3-defense
   - sac-default
   - sac-attack
-  - sac-proven
   - sac-defense
 
 # Global training params (apply to all specs)
 training:
   total_timesteps: 4000000
-  num_envs: 10
+  num_envs: 12
   batch_size: 256
   buffer_size: 1000000
   learning_starts: 10000
@@ -46,7 +43,27 @@ training:
   eval_freq: 20000
   device: null
   save_dir: checkpoints
-  eval_1v1_games: 100
+  model_dir: opponents
+  builtin_opponents: [
+    weak,
+    strong,
+    sac_hockey_best_proven4.pth,
+    sac_hockey_best_proven2.pth,
+    sac_hockey_best_attack8.pth,
+    sac_defense_r3.pth
+  ]   # training opponents: weak, strong, and/or .pth filenames (under model_dir)
+  evaluation_opponents: [
+    sac_hockey_best_attack11.pth,
+    sac_hockey_best_attack12.pth,
+    td3_defense_r3.pth,
+    sac_attack_r3.pth,
+    td3_default_r2.pth,
+    td3_proven_r3.pth,
+    sac_proven_r3.pth
+    sac_hockey_best_defensive3.pth
+    sac_hockey_best_proven1.pth
+    sac_hockey_best_proven3.pth
+  ]
   # TD3 defaults
   policy_lr: 3.0e-4
   critic_lr: 3.0e-4
@@ -56,22 +73,18 @@ training:
   policy_noise: 0.2
   noise_clip: 0.5
   policy_delay: 2
-  # Network size (TD3 and SAC)
+  # Network size (TD3 and SAC): hidden_size used as [hidden_size, hidden_size] for both algos
   hidden_size: 512
   # TD3 regularization and decay (dropout 0 = off; weight_decay 0 = off)
   dropout: 0.0
   weight_decay: 0.0
   # TD3 improvement bundle: when true, enables dropout + weight_decay + linear decay of policy_noise, dropout, weight_decay (schedule from total_timesteps)
-  improvement: false
-  # Optional overrides when improvement=false: linear decay end values (policy_noise->policy_noise_end, etc.); schedule_total_updates is computed from total_timesteps/learning_starts/update_ratio
-  # policy_noise_end: 0.05
-  # dropout_end: 0.0
-  # weight_decay_end: 0.0
+  improvement: True
   # SAC defaults (only used if algo: sac)
   actor_learning_rate: 3.0e-4
   critic_learning_rate: 3.0e-4
   alpha_learning_rate: 3.0e-4
   tau: 0.005
   alpha: 0.2
-  pink_noise: false
+  pink_noise: True
   noise_beta: 1.0

@@ -50,7 +50,7 @@ def main():
     poll_interval = coord.get("poll_interval", 120)
     timeout_hours = coord.get("timeout_hours", 24)
     assignment_timeout_hours = coord.get("assignment_timeout_hours", 2)
-    builtin_cfg = cfg.get("builtin_opponents")
+    builtin_cfg = (cfg.get("training") or {}).get("builtin_opponents") or cfg.get("builtin_opponents")
     if isinstance(builtin_cfg, list):
         builtin_opponents = [str(x).strip() for x in builtin_cfg if x]
     else:
