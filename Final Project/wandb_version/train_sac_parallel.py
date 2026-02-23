@@ -341,7 +341,7 @@ def train_parallel(args):
     reward_str = args.reward_mode.capitalize()
     print(f"Training on {device} | Mode: {mode_str} | Reward: {reward_str} | Opponents: {num_training_opponents} (builtin + pool)")
 
-    # Build per-env opponent assignments
+    # Build per-env opponent assignments (cycle when opponents > num_envs; for round-robin use train_parallel.py)
     opponent_types = []
     opponent_paths = []
     opponent_algos_per_env = []

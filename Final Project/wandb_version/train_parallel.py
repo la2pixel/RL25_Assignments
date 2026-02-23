@@ -13,8 +13,24 @@ import os
 import argparse
 import sys
 from collections import deque
-from gymnasium.vector import AsyncVectorEnv
+from gymnasium.vector import AsyncVectorEnv, SyncVectorEnv
 import hockey.hockey_env as h_env
+
+
+class ObsAgentTwoInfoWrapper(gym.Wrapper):
+    """Adds obs_agent_two to info each step and on reset (for rotation mode: main process computes opponent action)."""
+
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+        info = dict(info) if info else {}
+        info["obs_agent_two"] = self.env.obs_agent_two()
+        return obs, info
+
+    def step(self, action):
+        obs, reward, done, trunc, info = self.env.step(action)
+        info = dict(info) if info else {}
+        info["obs_agent_two"] = self.env.obs_agent_two()
+        return obs, reward, done, trunc, info
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from hockey_td3 import TD3Agent
@@ -140,6 +156,42 @@ def _resolve_opponents(names, model_dir):
                 f"Unknown opponent name {name!r}. Valid: 'weak', 'strong', or a .pth filename (e.g. td3_default_r1.pth)."
             )
     return result
+
+
+def _make_opponent_object(opponent_type, opponent_model_path, opponent_algo, obs_dim, action_dim):
+    """Create one opponent (BasicOpponent or AgentOpponent) for rotation mode."""
+    if opponent_type == "weak":
+        return h_env.BasicOpponent(weak=True)
+    if opponent_type == "strong":
+        return h_env.BasicOpponent(weak=False)
+    if opponent_type == "model" and opponent_model_path:
+        if opponent_algo == "td3":
+            op_agent = TD3Agent(state_dim=obs_dim, action_dim=action_dim)
+        else:
+            op_agent = SAC(obs_dim=obs_dim, action_dim=action_dim, device="cpu", hidden_sizes=(512, 512))
+        op_agent.load(opponent_model_path)
+        class AgentOpponent:
+            def __init__(self, agent): self.agent = agent
+            def act(self, obs): return self.agent.select_action(obs, deterministic=True)
+        return AgentOpponent(op_agent)
+    return h_env.BasicOpponent(weak=True)
+
+
+def make_bare_env(rank, reward_mode="default"):
+    """Env without opponent; adds obs_agent_two to info (for rotation mode: main process supplies opponent action)."""
+
+    def _thunk():
+        raw_env = h_env.HockeyEnv()
+        wrapped = ObsAgentTwoInfoWrapper(raw_env)
+        if reward_mode == "attack":
+            return AttackRewardWrapper(wrapped)
+        if reward_mode == "defense":
+            return DefenseRewardWrapper(wrapped)
+        if reward_mode == "proven":
+            return ProvenRewardWrapper(wrapped)
+        return wrapped
+
+    return _thunk
 
 
 def make_env(opponent_type, rank=0, opponent_model_path=None, reward_mode='default', opponent_algo=None):
@@ -283,7 +335,11 @@ def train_parallel(args):
     opp_str = f"{num_training_opponents} training opponents (builtin + pool)" if round_based else (f"{num_training_opponents} opponents" if training_opponent_triples else "mix (weak/strong)")
     print(f"Training on {device} | Algo: {args.algo.upper()} | Reward: {args.reward_mode} | Opponents: {opp_str}")
 
-    # Opponent assignment: cycle over (type, path, algo)
+    # Round-robin: when more opponents than num_envs, rotate opponent per env on episode end (keeps num_envs fixed)
+    use_rotation = bool(training_opponent_triples and num_training_opponents > args.num_envs)
+    if use_rotation:
+        print(f"[Rotation] Opponents ({num_training_opponents}) > num_envs ({args.num_envs}): round-robin opponent per env (no extra envs).")
+
     opponent_types = []
     opponent_paths = []
     opponent_algos_per_env = []
@@ -329,10 +385,25 @@ def train_parallel(args):
             run_path = getattr(wandb.run, 'path', None) or f"{getattr(args, 'entity', '')}/{project}/{wandb.run.id}"
             pool.register_worker_run(getattr(args, 'entity', None), project, getattr(args, 'round', 0), args.worker_id, run_path, pool_key=pool_key)
 
-    envs = AsyncVectorEnv([
-        make_env(op, i, path, reward_mode=args.reward_mode, opponent_algo=algo)
-        for i, (op, path, algo) in enumerate(zip(opponent_types, opponent_paths, opponent_algos_per_env))
-    ])
+    rotation_opponents = None
+    current_opponent_index = None
+    if use_rotation:
+        # Round-robin: bare envs in main process; opponents in main; rotate index on episode end
+        dummy = h_env.HockeyEnv()
+        _obs_dim = dummy.observation_space.shape[0]
+        _action_dim = dummy.action_space.shape[0] // 2
+        rotation_opponents = []
+        for t, path, algo in training_opponent_triples:
+            opp_type = t if t in ("weak", "strong") else "model"
+            rotation_opponents.append(_make_opponent_object(opp_type, path, algo or "sac", _obs_dim, _action_dim))
+        dummy.close()
+        current_opponent_index = np.array([i % num_training_opponents for i in range(args.num_envs)], dtype=np.int32)
+        envs = SyncVectorEnv([make_bare_env(i, args.reward_mode) for i in range(args.num_envs)])
+    else:
+        envs = AsyncVectorEnv([
+            make_env(op, i, path, reward_mode=args.reward_mode, opponent_algo=algo)
+            for i, (op, path, algo) in enumerate(zip(opponent_types, opponent_paths, opponent_algos_per_env))
+        ])
     # Evaluation opponents (unseen): from config, resolved with model_dir; not used for training
     eval_opponent_names = getattr(args, 'evaluation_opponents', None)
     if eval_opponent_names is None:
@@ -419,7 +490,7 @@ def train_parallel(args):
     if args.algo == 'sac' and getattr(args, 'pink_noise', False):
         env_noise_processes = [ColoredNoiseProcess(getattr(args, 'noise_beta', 1.0), action_dim, seq_len=500) for _ in range(args.num_envs)]
 
-    obs, _ = envs.reset()
+    obs, infos = envs.reset()
     total_steps = 0
     last_log_step = 0
     best_eval_metric = -float('inf')  # best = highest eval reward
@@ -444,9 +515,24 @@ def train_parallel(args):
                     act_t, _ = agent.actor.sample(obs_t)
                 actions = act_t.cpu().numpy()
 
-        next_obs, rewards, dones, truncs, infos = envs.step(actions)
+        if use_rotation:
+            # Rotation: main process supplies opponent action; step expects full (agent1 + agent2) action
+            obs_p2 = infos.get("obs_agent_two")  # (num_envs, obs_dim) from SyncVectorEnv
+            opp_actions = np.array(
+                [rotation_opponents[current_opponent_index[i]].act(obs_p2[i]) for i in range(args.num_envs)],
+                dtype=np.float32,
+            )
+            step_actions = np.hstack([actions, opp_actions])
+        else:
+            step_actions = actions
+
+        next_obs, rewards, dones, truncs, infos = envs.step(step_actions)
         current_ep_rewards += rewards
         finished = np.logical_or(dones, truncs)
+        if use_rotation and finished.any():
+            for i in range(args.num_envs):
+                if finished[i]:
+                    current_opponent_index[i] = (current_opponent_index[i] + 1) % num_training_opponents
         if finished.any():
             for i, f in enumerate(finished):
                 if f:

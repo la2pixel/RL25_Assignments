@@ -10,6 +10,7 @@ Usage (single 1v1, no wandb):
 Usage (multiple candidates/opponents, optional wandb):
     python evaluate_hockey.py --candidates_dir checkpoints/candidates --opponents_dir checkpoints/opponents --num_episodes 1000 --wandb
     python evaluate_hockey.py --candidates p1.pth p2.pth --opponents weak strong p3.pth --num_episodes 500
+    python evaluate_hockey.py --candidates p1.pth --opponents_dir opponents --n_env_per_opponent 100  # equal 100 episodes per opponent (overrides weighting)
 
 """
 
@@ -264,12 +265,15 @@ def _resolve_opponents(args):
     sys.exit(1)
 
 
-def _print_eval_start_log(candidates, opponents, num_episodes, max_steps, weighted_mode, weights=None, probs=None):
-    """Log at start: which models are used and, in weighted mode, episode ratio per opponent."""
+def _print_eval_start_log(candidates, opponents, num_episodes, max_steps, weighted_mode, weights=None, probs=None, n_env_per_opponent=None):
+    """Log at start: which models are used and, in weighted mode, episode ratio per opponent (or equal n_env_per_opponent)."""
     print("\n" + "=" * 60)
     print("EVALUATION CONFIG")
     print("=" * 60)
-    print(f"  Total episodes: {num_episodes}  |  Max steps per episode: {max_steps}")
+    total_eps = num_episodes if n_env_per_opponent is None else (n_env_per_opponent * len(opponents))
+    print(f"  Total episodes: {total_eps}  |  Max steps per episode: {max_steps}")
+    if n_env_per_opponent is not None:
+        print(f"  Mode: equal envs per opponent  |  n_env_per_opponent: {n_env_per_opponent}")
     print(f"  Candidates ({len(candidates)}):")
     for path in candidates:
         algo = algo_from_path(path) or "?"
@@ -279,7 +283,9 @@ def _print_eval_start_log(candidates, opponents, num_episodes, max_steps, weight
         name = spec if spec in ("weak", "strong") else os.path.basename(spec)
         algo = "built-in" if spec in ("weak", "strong") else (algo_from_path(spec) or "?")
         line = f"    - {name}  [algo: {algo}]"
-        if weighted_mode and weights is not None and probs is not None:
+        if n_env_per_opponent is not None:
+            line += f"  |  {n_env_per_opponent} envs (equal)"
+        elif weighted_mode and weights is not None and probs is not None:
             w = weights[i]
             expected = int(round(probs[i] * num_episodes))
             pct = probs[i] * 100
@@ -305,6 +311,8 @@ def main():
     parser.add_argument("--wandb", action="store_true", help="Log results to wandb (aggregate + per-opponent tables)")
     parser.add_argument("--wandb_project", type=str, default="hockey-eval", help="wandb project for this run (use same as training to keep all in one project)")
     parser.add_argument("--wandb_entity", type=str, default=None, help="wandb entity (default: current user)")
+    parser.add_argument("--n_env_per_opponent", type=int, default=None,
+                        help="If set, use equal episodes per opponent (overrides weighting); each opponent gets this many episodes per candidate.")
     args = parser.parse_args()
 
     try:
@@ -373,20 +381,26 @@ def main():
                 config={
                     "candidates": candidates, "opponents": opponents,
                     "num_episodes": args.num_episodes, "max_steps": args.max_steps, "hidden_size": hidden_size,
+                    "n_env_per_opponent": getattr(args, "n_env_per_opponent", None),
                 },
             )
 
     # Opponents that are paths get weights from name; built-ins get weight 1. All-path opponents => weighted mode
+    # If --n_env_per_opponent is set, we ignore weights and give each opponent exactly that many episodes.
+    n_env_per_opponent = getattr(args, "n_env_per_opponent", None)
+    if n_env_per_opponent is not None and n_env_per_opponent <= 0:
+        n_env_per_opponent = None
+
     opponent_paths = [o for o in opponents if o not in ("weak", "strong")]
     all_opponents_are_paths = len(opponent_paths) == len(opponents) and len(opponents) > 1
     weighted_mode = all_opponents_are_paths and len(opponents) >= 1
 
-    weights = [weight_from_name(o) for o in opponents] if weighted_mode else None
+    weights = [weight_from_name(o) for o in opponents] if weighted_mode and n_env_per_opponent is None else None
     total_w = sum(weights) if weights else 0
     probs = [w / total_w for w in weights] if total_w else None
 
     _print_eval_start_log(candidates, opponents, args.num_episodes, args.max_steps,
-                          weighted_mode, weights=weights, probs=probs)
+                          weighted_mode, weights=weights, probs=probs, n_env_per_opponent=n_env_per_opponent)
 
     def _opponent_display_name(spec):
         return spec if spec in ("weak", "strong") else os.path.basename(spec)
@@ -438,7 +452,7 @@ def main():
         return _wandb.Image(img, caption=title)
 
     if weighted_mode:
-        # Weighted: one run per candidate over num_episodes; each episode sample opponent by weight
+        # Weighted: one run per candidate; each episode either sampled by weight or (if n_env_per_opponent set) equal per opponent
         # Pre-load all opponent agents (all are paths)
         opp_agents = []
         for opp_path in opponents:
@@ -451,7 +465,14 @@ def main():
         aggregate_rows = []
         per_opponent_rows = []
         n_candidates = len(candidates)
-        progress_step = max(1, min(500, args.num_episodes // 20))  # progress every ~5% or 500 eps
+        if n_env_per_opponent is not None:
+            total_eps = n_env_per_opponent * len(opponents)
+            # Deterministic schedule: each opponent appears exactly n_env_per_opponent times
+            ep_schedule = [opp_idx for opp_idx in range(len(opponents)) for _ in range(n_env_per_opponent)]
+        else:
+            total_eps = args.num_episodes
+            ep_schedule = None
+        progress_step = max(1, min(500, total_eps // 20))  # progress every ~5% or 500 eps
         for ci, cand_path in enumerate(candidates):
             try:
                 agent1 = load_agent(cand_path, obs_dim, action_dim, device, hidden_size)
@@ -460,13 +481,16 @@ def main():
                 env.close()
                 sys.exit(1)
             cand_name = os.path.basename(cand_path)
-            print(f"\nCandidate {ci+1}/{n_candidates}: {cand_name} ({args.num_episodes} episodes)...")
+            print(f"\nCandidate {ci+1}/{n_candidates}: {cand_name} ({total_eps} episodes)...")
             rewards = []
             wins = draws = losses = 0
             per_opp = [{"reward_sum": 0.0, "n": 0, "wins": 0, "draws": 0, "losses": 0} for _ in opponents]
             rng = random.Random(42)
-            for ep in range(args.num_episodes):
-                opp_idx = rng.choices(range(len(opponents)), weights=probs, k=1)[0]
+            for ep in range(total_eps):
+                if ep_schedule is not None:
+                    opp_idx = ep_schedule[ep]
+                else:
+                    opp_idx = rng.choices(range(len(opponents)), weights=probs, k=1)[0]
                 opp_agent = opp_agents[opp_idx]
                 reward, winner = run_single_episode(env, agent1, opponent_model=opp_agent, max_steps=args.max_steps, seed=ep + 12345)
                 rewards.append(reward)
@@ -484,9 +508,9 @@ def main():
                     per_opp[opp_idx]["losses"] += 1
                 else:
                     per_opp[opp_idx]["draws"] += 1
-                if (ep + 1) % progress_step == 0 or (ep + 1) == args.num_episodes:
-                    pct = (ep + 1) / args.num_episodes * 100
-                    print(f"  Episodes {ep+1}/{args.num_episodes} ({pct:.1f}%) | mean_reward={np.mean(rewards):.2f} | wins={wins} draws={draws} losses={losses}")
+                if (ep + 1) % progress_step == 0 or (ep + 1) == total_eps:
+                    pct = (ep + 1) / total_eps * 100
+                    print(f"  Episodes {ep+1}/{total_eps} ({pct:.1f}%) | mean_reward={np.mean(rewards):.2f} | wins={wins} draws={draws} losses={losses}")
             n = len(rewards)
             agg_win = wins / n * 100 if n else 0
             agg_draw = draws / n * 100 if n else 0
@@ -532,8 +556,9 @@ def main():
                 slug = re.sub(r"[^\w\-.]", "_", opp_name)[:50]
                 wandb.log({f"eval/stacked_bar_vs_{slug}": _stacked_bar_image(cands_o, wins_o, draws_o, losses_o, f"Candidates vs {opp_name} (sorted by loss rate)", sort_by_loss=False)})
     else:
-        # Non-weighted: each (candidate, opponent) run num_episodes
+        # Non-weighted: each (candidate, opponent) run num_episodes (or n_env_per_opponent if set)
         rows = []
+        eps_per_pair = n_env_per_opponent if n_env_per_opponent is not None else args.num_episodes
         for cand_path in candidates:
             try:
                 agent1 = load_agent(cand_path, obs_dim, action_dim, device, hidden_size)
@@ -554,9 +579,9 @@ def main():
                         env.close()
                         sys.exit(1)
                     opp_agent = None
-                stats = evaluate(env, agent1, num_episodes=args.num_episodes, render=args.render,
+                stats = evaluate(env, agent1, num_episodes=eps_per_pair, render=args.render,
                                 max_steps=args.max_steps, opponent_agent=opp_agent, opponent_model=opp_model,
-                                progress_interval=max(1, min(500, args.num_episodes // 20)))
+                                progress_interval=max(1, min(500, eps_per_pair // 20)))
                 rows.append((cand_name, _opponent_display_name(opp_spec), stats["mean_reward"],
                              stats["win_rate"], stats["draw_rate"], stats["loss_rate"]))
         if args.wandb and rows:

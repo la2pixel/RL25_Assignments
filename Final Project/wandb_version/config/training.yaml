@@ -33,7 +33,7 @@ specs:
 
 # Global training params (apply to all specs)
 training:
-  total_timesteps: 4000000
+  total_timesteps: 6000000
   num_envs: 12
   batch_size: 256
   buffer_size: 1000000
