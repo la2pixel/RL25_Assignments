@@ -43,7 +43,7 @@ training:
   eval_freq: 100000
   device: null
   save_dir: checkpoints
-  model_dir: final_training_opponents
+  model_dir: opponents
   builtin_opponents: [
     weak,
     strong,
