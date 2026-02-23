@@ -29,6 +29,13 @@ Final Project/wandb_version/wandb/
 Final Project/checkpoints/
 Final Project/pool_cache/
 Final Project/artifacts/
+Final Project/phase1_candidate_models/
+Final Project/phase2_*/
+Final Project/final_phase_eval_opponents/
+Final Project/final_phase_training_candidates/
+Final Project/final_potential_candidates/
+Final Project/prephase2_opponents/
+Final Project/opponents/
 Final Project/.worker_last_round*
 wandb_version/checkpoints/
 **/wandb/
