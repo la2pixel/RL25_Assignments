@@ -5,30 +5,35 @@ import numpy as np
 
 
 class Actor(nn.Module):
-    def __init__(self, state_dim, action_dim):
+    def __init__(self, state_dim, action_dim, dropout):
         super(Actor, self).__init__()
-        self.layer1 = nn.Linear(state_dim, 256)
-        self.layer2 = nn.Linear(256, 256)
-        self.layer3 = nn.Linear(256, action_dim)
+        self.layer1 = nn.Linear(state_dim, 512)
+        self.layer2 = nn.Linear(512, 512)
+        self.layer3 = nn.Linear(512, action_dim)
+
+        self.dropout = nn.Dropout(p=dropout)
 
     def forward(self, state):
-        x = F.relu(self.layer1(state))
-        x = F.relu(self.layer2(x))
+        x = self.dropout(F.relu(self.layer1(state)))
+        x = self.dropout(F.relu(self.layer2(x)))
         x = torch.tanh(self.layer3(x))
         return x
 
 
 class Critic(nn.Module):
-    def __init__(self, state_dim, action_dim):
+    def __init__(self, state_dim, action_dim, dropout):
         super(Critic, self).__init__()
-        self.layer1 = nn.Linear(state_dim + action_dim, 256)
-        self.layer2 = nn.Linear(256, 256)
-        self.layer3 = nn.Linear(256, 1)
+        self.layer1 = nn.Linear(state_dim + action_dim, 512)
+        self.layer2 = nn.Linear(512, 512)
+        self.layer3 = nn.Linear(512, 1)
+
+        self.dropout = nn.Dropout(p=dropout)
 
     def forward(self, state, action):
+        # horizontally stack state and action for the critic as input
         x = torch.hstack([state, action])
-        x = F.relu(self.layer1(x))
-        x = F.relu(self.layer2(x))
+        x = self.dropout(F.relu(self.layer1(x)))
+        x = self.dropout(F.relu(self.layer2(x)))
         x = self.layer3(x)
         return x
 
@@ -46,33 +51,47 @@ class TD3Agent:
         policy_noise=0.2,
         noise_clip=0.5,
         policy_delay=2,
+        improvement=True,
     ):
+        # decay: linear from start to _end over training
+        self.improvement = improvement
+        weight_decay = 1e-5 if improvement else 0
+        weight_decay_end = 0
+        dropout = 0.1 if improvement else 0
+        dropout_end = 0
+        policy_noise_end = 0.05 if improvement else policy_noise
+
+        # current decay values for improvement params
+        self._dropout, self._dropout_end = dropout, dropout_end
+        self._weight_decay, self._weight_decay_end = weight_decay, weight_decay_end
+        self._policy_noise, self._policy_noise_end = policy_noise, policy_noise_end
+
         # check if gpu is available
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # initializing networks
         # main actor
-        self.actor = Actor(state_dim, action_dim).to(self.device)
-        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=policy_lr)
+        self.actor = Actor(state_dim, action_dim, dropout).to(self.device)
+        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=policy_lr, weight_decay=weight_decay)
 
         # target actor
-        self.actor_target = Actor(state_dim, action_dim).to(self.device)
+        self.actor_target = Actor(state_dim, action_dim, dropout).to(self.device)
         self.actor_target.load_state_dict(self.actor.state_dict())
 
         # main critic1
-        self.critic1 = Critic(state_dim, action_dim).to(self.device)
-        self.critic1_optimizer = torch.optim.Adam(self.critic1.parameters(), lr=critic_lr)
+        self.critic1 = Critic(state_dim, action_dim, dropout).to(self.device)
+        self.critic1_optimizer = torch.optim.Adam(self.critic1.parameters(), lr=critic_lr, weight_decay=weight_decay)
 
         # target critic1
-        self.critic1_target = Critic(state_dim, action_dim).to(self.device)
+        self.critic1_target = Critic(state_dim, action_dim, dropout).to(self.device)
         self.critic1_target.load_state_dict(self.critic1.state_dict())
 
         # main critic2
-        self.critic2 = Critic(state_dim, action_dim).to(self.device)
-        self.critic2_optimizer = torch.optim.Adam(self.critic2.parameters(), lr=critic_lr)
+        self.critic2 = Critic(state_dim, action_dim, dropout).to(self.device)
+        self.critic2_optimizer = torch.optim.Adam(self.critic2.parameters(), lr=critic_lr, weight_decay=weight_decay)
 
         # target critic2
-        self.critic2_target = Critic(state_dim, action_dim).to(self.device)
+        self.critic2_target = Critic(state_dim, action_dim, dropout).to(self.device)
         self.critic2_target.load_state_dict(self.critic2.state_dict())
 
         # hyperparameters
@@ -90,16 +109,32 @@ class TD3Agent:
 
     # soft update of target network: blend target with main network using polyak
     def polyak_update(self, main_network, target_network):
+        # AI Usage: asked AI how to update target network params with the main network params
         for main_param, target_param in zip(main_network.parameters(), target_network.parameters()):
             target_param.data.copy_(
                 self.polyak * target_param.data + (1 - self.polyak) * main_param.data
             )
 
+    def _apply_decay(self, progress):
+        # set dropout, weight_decay, policy_noise to decay linearly
+        dropout_p = self._dropout + (self._dropout_end - self._dropout) * progress
+        wd = self._weight_decay + (self._weight_decay_end - self._weight_decay) * progress
+        self.policy_noise = self._policy_noise + (self._policy_noise_end - self._policy_noise) * progress
+
+        # AI Usage: asked AI how to update params
+        for net in (self.actor, self.actor_target, self.critic1, self.critic1_target,
+                    self.critic2, self.critic2_target):
+            net.dropout.p = dropout_p
+        for opt in (self.actor_optimizer, self.critic1_optimizer, self.critic2_optimizer):
+            for group in opt.param_groups:
+                group["weight_decay"] = wd
+
     def select_action(self, state, add_noise=True, deterministic=None):
+        # added deterministic param for evaluate_hockey script compatibility
         if deterministic is not None:
             add_noise = not deterministic
 
-        # ensure we have a batch dimension: (state_dim,) -> (1, state_dim), (batch, state_dim) stays (batch, state_dim)
+        # ensure we have a batch dimension: (state_dim,) -> (1, state_dim)
         state_np = np.asarray(state, dtype=np.float32)
         if state_np.ndim == 1:
             state_batch = state_np.reshape(1, -1)
@@ -122,9 +157,14 @@ class TD3Agent:
             return action.flatten()
         return action
 
-    def update(self, replay_buffer, batch_size):
+    def update(self, replay_buffer, batch_size, step=None, max_steps=None):
+        # wait til we have enough transition to sample a whole batch
         if len(replay_buffer) < batch_size:
             return
+        # decay weight_decay, dropout and policy noise if improvement is set
+        if self.improvement and step is not None and max_steps is not None and max_steps > 0:
+            progress = step / max_steps
+            self._apply_decay(progress)
         observations, actions, rewards, next_observations, dones = replay_buffer.sample(batch_size)
         self.total_updates += 1
 

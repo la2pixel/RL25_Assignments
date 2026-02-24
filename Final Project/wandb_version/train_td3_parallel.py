@@ -303,6 +303,7 @@ def train_parallel(args):
         policy_noise=args.policy_noise,
         noise_clip=args.noise_clip,
         policy_delay=args.policy_delay,
+        improvement=args.improvement,
     )
     device = agent.device
 
@@ -356,7 +357,7 @@ def train_parallel(args):
         if total_steps >= args.learning_starts:
             updates = int(args.num_envs * args.update_ratio)
             for _ in range(updates):
-                agent.update(replay_buffer, args.batch_size)
+                agent.update(replay_buffer, args.batch_size, step=total_steps, max_steps=args.total_timesteps)
 
         if total_steps - last_log_step >= args.log_freq:
             last_log_step = total_steps
@@ -448,7 +449,7 @@ if __name__ == "__main__":
     parser.add_argument('--eval_freq', type=int, default=20000)
     parser.add_argument('--device', type=str, default=None)
 
-    # Hyperparameters (TD3)
+    # Hyperparameters
     parser.add_argument('--policy_lr', type=float, default=3e-4)
     parser.add_argument('--critic_lr', type=float, default=3e-4)
     parser.add_argument('--gamma', type=float, default=0.99)
@@ -457,6 +458,7 @@ if __name__ == "__main__":
     parser.add_argument('--policy_noise', type=float, default=0.2)
     parser.add_argument('--noise_clip', type=float, default=0.5)
     parser.add_argument('--policy_delay', type=int, default=2)
+    parser.add_argument('--improvement', type=bool, default=True)
 
     # Opponents
     parser.add_argument('--opponent', type=str, default='mix')
