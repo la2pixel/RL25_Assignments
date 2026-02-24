@@ -205,6 +205,8 @@ class TD3Agent:
             self.actor_optimizer.step()
 
             # update target network for actor, critic1 and critic2
+            # Note: I update critic targets delayed as well, as this is how it is written in the pseudo-code
+            # OpenAI-Spinning https://spinningup.openai.com/en/latest/algorithms/td3.html
             self.polyak_update(self.actor, self.actor_target)
             self.polyak_update(self.critic1, self.critic1_target)
             self.polyak_update(self.critic2, self.critic2_target)

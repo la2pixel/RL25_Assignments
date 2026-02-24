@@ -3,9 +3,10 @@
 Evaluate a trained SAC or TD3 agent on the hockey environment.
 
 Usage:
-    python evaluate_hockey.py --model_path checkpoints/sac_hockey_best.pth --agent_type sac --opponent weak
-    python evaluate_hockey.py --model_path checkpoints/td3_hockey_best.pth --agent_type td3 --opponent strong
-    python evaluate_hockey.py --model_path checkpoints/agent_v1.pth --agent_type sac --opponent_model checkpoints/agent_v2.pth --opponent_type td3
+    python evaluate_hockey.py --model_path checkpoints/sac_hockey_best.pth --opponent weak
+    python evaluate_hockey.py --model_path checkpoints/td3_hockey_best.pth --opponent strong
+    python evaluate_hockey.py --model_path checkpoints/agent_v1.pth sac --opponent_model checkpoints/agent_v2.pth
+    python
 """
 
 import argparse
@@ -111,9 +112,7 @@ def evaluate(env, agent1, num_episodes=10, render=False, max_steps=500,
 def main():
     parser = argparse.ArgumentParser(description='Evaluate SAC Agent')
     parser.add_argument('--model_path', type=str, required=True)
-    parser.add_argument('--agent_type', type=str, required=True, choices=['sac', 'td3'])
     parser.add_argument('--opponent_model', type=str, default=None)
-    parser.add_argument('--opponent_type', type=str, default=None, choices=['sac', 'td3'])
     parser.add_argument('--opponent', type=str, default='weak', choices=['weak', 'strong'])
     parser.add_argument('--num_episodes', type=int, default=10)
     parser.add_argument('--render', action='store_true')
@@ -123,8 +122,9 @@ def main():
 
     args = parser.parse_args()
 
-    if args.opponent_model and args.opponent_type is None:
-        parser.error("--opponent_type is required when --opponent_model is specified")
+    # infer agent and opponent type from file name
+    agent_type = 'td3' if 'td3' in args.model_path.lower() else 'sac'
+    opponent_type = 'td3' if (args.opponent_model and 'td3' in args.opponent_model.lower()) else ('sac' if args.opponent_model else None)
 
     try:
         import hockey.hockey_env as h_env
@@ -142,12 +142,10 @@ def main():
 
     # Load Player 1 (SAC: pink_noise flag doesn't matter for eval — always deterministic)
     print(f"\nLOADING PLAYER 1: {args.model_path}")
-    if args.agent_type == 'sac':
+    if agent_type == 'sac':
         agent1 = SAC(obs_dim, action_dim, device=device, hidden_sizes=args.hidden_sizes)
-    elif args.agent_type == 'td3':
+    elif agent_type == 'td3':
         agent1 = TD3Agent(obs_dim, action_dim)
-    else:
-        raise Exception(f"Unknown agent type: {args.agent_type}")
     try:
         agent1.load(args.model_path)
     except Exception as e:
@@ -159,12 +157,10 @@ def main():
 
     if args.opponent_model:
         print(f"LOADING PLAYER 2: {args.opponent_model}")
-        if args.opponent_type == 'sac':
+        if opponent_type == 'sac':
             opponent_model = SAC(obs_dim, action_dim, device=device, hidden_sizes=args.hidden_sizes)
-        elif args.opponent_type == 'td3':
+        elif opponent_type == 'td3':
             opponent_model = TD3Agent(obs_dim, action_dim)
-        else:
-            raise Exception(f"Unknown opponent type: {args.opponent_type}")
         try:
             opponent_model.load(args.opponent_model)
         except Exception as e:
