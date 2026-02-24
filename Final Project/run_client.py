@@ -8,6 +8,7 @@ import numpy as np
 
 from comprl.client import Agent, launch_client
 
+from hockey_sac import SAC
 from hockey_td3 import TD3Agent
 
 
@@ -87,6 +88,34 @@ class TD3ClientAgent(Agent):
         )
 
 
+class SACClientAgent(Agent):
+    """Hockey agent that uses a trained SAC model."""
+
+    def __init__(self, model_path: str) -> None:
+        super().__init__()
+        env = h_env.HockeyEnv()
+        obs_dim = env.observation_space.shape[0]
+        action_dim = env.action_space.shape[0] // 2
+        self.sac_agent = SAC(obs_dim, action_dim, device="cpu", hidden_sizes=(512, 512))
+        self.sac_agent.load(model_path)
+
+    def get_step(self, observation: list[float]) -> list[float]:
+        obs = np.asarray(observation, dtype=np.float32)
+        action = self.sac_agent.select_action(obs, deterministic=True)
+        return action.tolist()
+
+    def on_start_game(self, game_id) -> None:
+        game_id = uuid.UUID(int=int.from_bytes(game_id))
+        print(f"Game started (id: {game_id})")
+
+    def on_end_game(self, result: bool, stats: list[float]) -> None:
+        text_result = "won" if result else "lost"
+        print(
+            f"Game ended: {text_result} with my score: "
+            f"{stats[0]} against the opponent with score: {stats[1]}"
+        )
+
+
 # Function to initialize the agent.  This function is used with `launch_client` below,
 # to lauch the client and connect to the server.
 def initialize_agent(agent_args: list[str]) -> Agent:
@@ -95,7 +124,7 @@ def initialize_agent(agent_args: list[str]) -> Agent:
     parser.add_argument(
         "--agent",
         type=str,
-        choices=["weak", "strong", "random", "td3"],
+        choices=["weak", "strong", "random", "td3", "sac"],
         default="weak",
         help="Which agent to use.",
     )
@@ -103,7 +132,7 @@ def initialize_agent(agent_args: list[str]) -> Agent:
         "--model_path",
         type=str,
         default=None,
-        help="Path to .pth checkpoint (required when --agent td3).",
+        help="Path to .pth checkpoint (required when --agent td3 or sac).",
     )
     # comprl may pass --args through; strip it so our parser does not see it
     agent_args = [a for a in agent_args if a != "--args"]
@@ -121,6 +150,10 @@ def initialize_agent(agent_args: list[str]) -> Agent:
         if not args.model_path:
             parser.error("--model_path is required when --agent td3")
         agent = TD3ClientAgent(args.model_path)
+    elif args.agent == "sac":
+        if not args.model_path:
+            parser.error("--model_path is required when --agent sac")
+        agent = SACClientAgent(args.model_path)
     else:
         raise ValueError(f"Unknown agent: {args.agent}")
 
