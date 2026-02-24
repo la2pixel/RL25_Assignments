@@ -587,7 +587,7 @@ def compute_round_pool_state(entity, project, round_n, pool_keys):
     registry = read_worker_run_registry(entity, project, round_n)
     pool_keys_by_worker = read_pool_keys_by_worker_merged(entity, project, round_n)
     # Read old finished list first so we don't treat already-finished keys as "running" when a later run registers
-    old_finished_raw = read_finished_pool_keys_curated(entity, project, round_n) or read_finished_pool_keys_merged(entity, project, round_n)
+    old_finished_raw = read_finished_pool_keys_curated(entity, project, round_n) or read_finished_pool_keys_merged_filtered(entity, project, round_n)
     old_finished_set = set(old_finished_raw or [])
     finished_from_registry = set()
     running_set = set()

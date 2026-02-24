@@ -5,7 +5,6 @@ import numpy as np
 
 
 class Actor(nn.Module):
-    """Optional hidden_sizes and dropout; default (512,512) and dropout=0 match legacy checkpoints."""
     def __init__(self, state_dim, action_dim, hidden_sizes=(512, 512), dropout=0.0):
         super(Actor, self).__init__()
         sizes = [state_dim] + list(hidden_sizes)
