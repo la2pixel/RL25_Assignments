@@ -4,7 +4,7 @@
 # Algo: td3 | sac
 # Reward modes: default | attack | defense | proven
 
-project: hockey-training-phase3
+project: hockey-training-phase3-v2
 entity: meloneneis   # required: your wandb username (same on all machines)
 
 coordinator:
@@ -50,7 +50,13 @@ training:
     sac-attack-r4.pth,
     td3-attack-r5.pth,
     td3-defense-r3.pth,
-    sac-attack-r3.pth
+    sac-attack-r3.pth,
+    sac_hockey_best_proven4.pth,
+    sac_hockey_best_proven2.pth,
+    sac_hockey_best_attack8.pth,
+    sac_defense_r3.pth,
+    sac-defense-r5.pth,
+    td3-default-r5.pth
   ]   # training opponents: weak, strong, and/or .pth (under model_dir). Repeat an entry to use it more often (e.g. [weak, strong, weak] = 2x weak).
   evaluation_opponents: [
     sac_hockey_best_attack11.pth,
