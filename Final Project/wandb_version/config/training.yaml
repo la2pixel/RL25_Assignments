@@ -55,7 +55,7 @@ training:
     sac_hockey_best_attack8.pth,
     td3-attack-r5.pth,
     td3-default-r5.pth,
-    td3-defense-r5.pth
+    td3-defense-r5.pth,
     sac_defense_r3.pth,
     sac-default-r5.pth,
     sac-attack-r5.pth,
