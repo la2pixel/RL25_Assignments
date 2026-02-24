@@ -4,7 +4,7 @@
 # Algo: td3 | sac
 # Reward modes: default | attack | defense | proven
 
-project: hockey-training-phase3-v2
+project: hockey-training-phase4
 entity: meloneneis   # required: your wandb username (same on all machines)
 
 coordinator:
@@ -33,7 +33,7 @@ specs:
 
 # Global training params (apply to all specs)
 training:
-  total_timesteps: 8000000
+  total_timesteps: 10000000
   num_envs: 12
   batch_size: 256
   buffer_size: 1000000
@@ -48,15 +48,19 @@ training:
     weak,
     strong,
     sac-attack-r4.pth,
-    td3-attack-r5.pth,
     td3-defense-r3.pth,
     sac-attack-r3.pth,
     sac_hockey_best_proven4.pth,
     sac_hockey_best_proven2.pth,
     sac_hockey_best_attack8.pth,
+    td3-attack-r5.pth,
+    td3-default-r5.pth,
+    td3-defense-r5.pth
     sac_defense_r3.pth,
+    sac-default-r5.pth,
+    sac-attack-r5.pth,
     sac-defense-r5.pth,
-    td3-default-r5.pth
+
   ]   # training opponents: weak, strong, and/or .pth (under model_dir). Repeat an entry to use it more often (e.g. [weak, strong, weak] = 2x weak).
   evaluation_opponents: [
     sac_hockey_best_attack11.pth,
@@ -71,25 +75,25 @@ training:
     sac_hockey_best_proven3.pth
   ]
   # TD3 defaults
-  policy_lr: 3.0e-4
-  critic_lr: 3.0e-4
+  policy_lr: 1.0e-4
+  critic_lr: 1.0e-4
   gamma: 0.99
   polyak: 0.995
   act_noise_std: 0.1
-  policy_noise: 0.2
+  policy_noise: 0.3
   noise_clip: 0.5
   policy_delay: 2
   # Network size (TD3 and SAC): hidden_size used as [hidden_size, hidden_size] for both algos
-  hidden_size: 512
+  hidden_size: 1024
   # TD3 regularization and decay (dropout 0 = off; weight_decay 0 = off)
   dropout: 0.0
   weight_decay: 0.0
   # TD3 improvement bundle: when true, enables dropout + weight_decay + linear decay of policy_noise, dropout, weight_decay (schedule from total_timesteps)
   improvement: True
   # SAC defaults (only used if algo: sac)
-  actor_learning_rate: 3.0e-4
-  critic_learning_rate: 3.0e-4
-  alpha_learning_rate: 3.0e-4
+  actor_learning_rate: 1.0e-4
+  critic_learning_rate: 1.0e-4
+  alpha_learning_rate: 1.0e-4
   tau: 0.005
   alpha: 0.2
   pink_noise: True

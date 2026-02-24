@@ -158,17 +158,18 @@ def _resolve_opponents(names, model_dir):
     return result
 
 
-def _make_opponent_object(opponent_type, opponent_model_path, opponent_algo, obs_dim, action_dim):
-    """Create one opponent (BasicOpponent or AgentOpponent) for rotation mode."""
+def _make_opponent_object(opponent_type, opponent_model_path, opponent_algo, obs_dim, action_dim, opponent_hidden_size=512):
+    """Create one opponent (BasicOpponent or AgentOpponent) for rotation mode. opponent_hidden_size used when loading .pth opponents."""
     if opponent_type == "weak":
         return h_env.BasicOpponent(weak=True)
     if opponent_type == "strong":
         return h_env.BasicOpponent(weak=False)
     if opponent_type == "model" and opponent_model_path:
+        h = opponent_hidden_size
         if opponent_algo == "td3":
-            op_agent = TD3Agent(state_dim=obs_dim, action_dim=action_dim)
+            op_agent = TD3Agent(state_dim=obs_dim, action_dim=action_dim, hidden_sizes=[h, h])
         else:
-            op_agent = SAC(obs_dim=obs_dim, action_dim=action_dim, device="cpu", hidden_sizes=(512, 512))
+            op_agent = SAC(obs_dim=obs_dim, action_dim=action_dim, device="cpu", hidden_sizes=(h, h))
         op_agent.load(opponent_model_path)
         class AgentOpponent:
             def __init__(self, agent): self.agent = agent
@@ -194,7 +195,7 @@ def make_bare_env(rank, reward_mode="default"):
     return _thunk
 
 
-def make_env(opponent_type, rank=0, opponent_model_path=None, reward_mode='default', opponent_algo=None):
+def make_env(opponent_type, rank=0, opponent_model_path=None, reward_mode='default', opponent_algo=None, opponent_hidden_size=512):
     def _thunk():
         raw_env = h_env.HockeyEnv()
         if opponent_type == 'weak':
@@ -204,10 +205,11 @@ def make_env(opponent_type, rank=0, opponent_model_path=None, reward_mode='defau
         elif opponent_type == 'model' and opponent_model_path:
             obs_dim = raw_env.observation_space.shape[0]
             action_dim = raw_env.action_space.shape[0] // 2
+            h = opponent_hidden_size
             if opponent_algo == 'td3':
-                op_agent = TD3Agent(state_dim=obs_dim, action_dim=action_dim)
+                op_agent = TD3Agent(state_dim=obs_dim, action_dim=action_dim, hidden_sizes=[h, h])
             else:
-                op_agent = SAC(obs_dim=obs_dim, action_dim=action_dim, device="cpu", hidden_sizes=(512, 512))
+                op_agent = SAC(obs_dim=obs_dim, action_dim=action_dim, device="cpu", hidden_sizes=(h, h))
             try:
                 op_agent.load(opponent_model_path)
             except Exception as e:
@@ -395,13 +397,15 @@ def train_parallel(args):
         rotation_opponents = []
         for t, path, algo in training_opponent_triples:
             opp_type = t if t in ("weak", "strong") else "model"
-            rotation_opponents.append(_make_opponent_object(opp_type, path, algo or "sac", _obs_dim, _action_dim))
+            opp_h = getattr(args, 'opponent_hidden_size', 512)
+            rotation_opponents.append(_make_opponent_object(opp_type, path, algo or "sac", _obs_dim, _action_dim, opponent_hidden_size=opp_h))
         dummy.close()
         current_opponent_index = np.array([i % num_training_opponents for i in range(args.num_envs)], dtype=np.int32)
         envs = SyncVectorEnv([make_bare_env(i, args.reward_mode) for i in range(args.num_envs)])
     else:
+        opp_h = getattr(args, 'opponent_hidden_size', 512)
         envs = AsyncVectorEnv([
-            make_env(op, i, path, reward_mode=args.reward_mode, opponent_algo=algo)
+            make_env(op, i, path, reward_mode=args.reward_mode, opponent_algo=algo, opponent_hidden_size=opp_h)
             for i, (op, path, algo) in enumerate(zip(opponent_types, opponent_paths, opponent_algos_per_env))
         ])
     # Evaluation opponents (unseen): from config, resolved with model_dir; not used for training
@@ -422,7 +426,8 @@ def train_parallel(args):
         elif t == "strong":
             eval_envs.append((f"S{i}", make_env('strong', 900 + i, reward_mode='default')()))
         else:
-            eval_envs.append((os.path.basename(path) if path else f"M{i}", make_env('model', 900 + i, path, reward_mode='default', opponent_algo=algo or 'sac')()))
+            opp_h = getattr(args, 'opponent_hidden_size', 512)
+            eval_envs.append((os.path.basename(path) if path else f"M{i}", make_env('model', 900 + i, path, reward_mode='default', opponent_algo=algo or 'sac', opponent_hidden_size=opp_h)()))
 
     # --- Debug: print evaluation opponent assignments ---
     print(f"\n{'='*60}")
@@ -647,7 +652,8 @@ if __name__ == "__main__":
     parser.add_argument('--alpha_learning_rate', type=float, default=3e-4)
     parser.add_argument('--tau', type=float, default=0.005)
     parser.add_argument('--alpha', type=float, default=0.2)
-    parser.add_argument('--hidden_size', type=int, default=512)
+    parser.add_argument('--hidden_size', type=int, default=512, help='Network size for the agent being trained')
+    parser.add_argument('--opponent_hidden_size', type=int, default=512, help='Network size when loading .pth opponents (builtin_opponents / evaluation_opponents); use 512 for legacy checkpoints')
     parser.add_argument('--dropout', type=float, default=0.0, help='TD3: dropout after hidden layers (0 = off)')
     parser.add_argument('--weight_decay', type=float, default=0.0, help='TD3: L2 weight decay for Adam (0 = off)')
     parser.add_argument('--improvement', action='store_true', help='TD3: improvement bundle (dropout, weight_decay, linear decay)')
