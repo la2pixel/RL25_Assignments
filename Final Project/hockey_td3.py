@@ -5,35 +5,42 @@ import numpy as np
 
 
 class Actor(nn.Module):
-    def __init__(self, state_dim, action_dim, dropout):
+    def __init__(self, state_dim, action_dim, dropout, hidden_dim=512):
         super(Actor, self).__init__()
-        self.layer1 = nn.Linear(state_dim, 1024)
-        self.layer2 = nn.Linear(1024, 1024)
-        self.layer3 = nn.Linear(1024, action_dim)
+        self.layer1 = nn.Linear(state_dim, hidden_dim)
+        self.layer2 = nn.Linear(hidden_dim, hidden_dim)
+        self.layer3 = nn.Linear(hidden_dim, action_dim)
 
-        self.dropout = nn.Dropout(p=dropout)
+        self.dropout = nn.Dropout(p=dropout) if dropout > 0 else None
 
     def forward(self, state):
-        x = self.dropout(F.relu(self.layer1(state)))
-        x = self.dropout(F.relu(self.layer2(x)))
+        x = F.relu(self.layer1(state))
+        if self.dropout is not None:
+            x = self.dropout(x)
+        x = F.relu(self.layer2(x))
+        if self.dropout is not None:
+            x = self.dropout(x)
         x = torch.tanh(self.layer3(x))
         return x
 
 
 class Critic(nn.Module):
-    def __init__(self, state_dim, action_dim, dropout):
+    def __init__(self, state_dim, action_dim, dropout, hidden_dim=512):
         super(Critic, self).__init__()
-        self.layer1 = nn.Linear(state_dim + action_dim, 1024)
-        self.layer2 = nn.Linear(1024, 1024)
-        self.layer3 = nn.Linear(1024, 1)
+        self.layer1 = nn.Linear(state_dim + action_dim, hidden_dim)
+        self.layer2 = nn.Linear(hidden_dim, hidden_dim)
+        self.layer3 = nn.Linear(hidden_dim, 1)
 
-        self.dropout = nn.Dropout(p=dropout)
+        self.dropout = nn.Dropout(p=dropout) if dropout > 0 else None
 
     def forward(self, state, action):
-        # horizontally stack state and action for the critic as input
         x = torch.hstack([state, action])
-        x = self.dropout(F.relu(self.layer1(x)))
-        x = self.dropout(F.relu(self.layer2(x)))
+        x = F.relu(self.layer1(x))
+        if self.dropout is not None:
+            x = self.dropout(x)
+        x = F.relu(self.layer2(x))
+        if self.dropout is not None:
+            x = self.dropout(x)
         x = self.layer3(x)
         return x
 
@@ -51,7 +58,8 @@ class TD3Agent:
         policy_noise=0.2,
         noise_clip=0.5,
         policy_delay=2,
-        improvement=True,
+        improvement=False,
+        hidden_dim=512,
     ):
         # decay: linear from start to _end over training
         self.improvement = improvement
@@ -71,27 +79,27 @@ class TD3Agent:
 
         # initializing networks
         # main actor
-        self.actor = Actor(state_dim, action_dim, dropout).to(self.device)
+        self.actor = Actor(state_dim, action_dim, dropout, hidden_dim=hidden_dim).to(self.device)
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=policy_lr, weight_decay=weight_decay)
 
         # target actor
-        self.actor_target = Actor(state_dim, action_dim, dropout).to(self.device)
+        self.actor_target = Actor(state_dim, action_dim, dropout, hidden_dim=hidden_dim).to(self.device)
         self.actor_target.load_state_dict(self.actor.state_dict())
 
         # main critic1
-        self.critic1 = Critic(state_dim, action_dim, dropout).to(self.device)
+        self.critic1 = Critic(state_dim, action_dim, dropout, hidden_dim=hidden_dim).to(self.device)
         self.critic1_optimizer = torch.optim.Adam(self.critic1.parameters(), lr=critic_lr, weight_decay=weight_decay)
 
         # target critic1
-        self.critic1_target = Critic(state_dim, action_dim, dropout).to(self.device)
+        self.critic1_target = Critic(state_dim, action_dim, dropout, hidden_dim=hidden_dim).to(self.device)
         self.critic1_target.load_state_dict(self.critic1.state_dict())
 
         # main critic2
-        self.critic2 = Critic(state_dim, action_dim, dropout).to(self.device)
+        self.critic2 = Critic(state_dim, action_dim, dropout, hidden_dim=hidden_dim).to(self.device)
         self.critic2_optimizer = torch.optim.Adam(self.critic2.parameters(), lr=critic_lr, weight_decay=weight_decay)
 
         # target critic2
-        self.critic2_target = Critic(state_dim, action_dim, dropout).to(self.device)
+        self.critic2_target = Critic(state_dim, action_dim, dropout, hidden_dim=hidden_dim).to(self.device)
         self.critic2_target.load_state_dict(self.critic2.state_dict())
 
         # hyperparameters
@@ -221,9 +229,30 @@ class TD3Agent:
     def load(self, path):
         checkpoint = torch.load(path, map_location=self.device, weights_only=True)
 
-        self.actor.load_state_dict(checkpoint['actor'])
-        self.critic1.load_state_dict(checkpoint['critic1'])
-        self.critic2.load_state_dict(checkpoint['critic2'])
+        # Validate checkpoint shapes match current model (e.g. hidden_dim from checkpoint vs agent)
+        for name, state_dict, model in [
+            ("actor", checkpoint["actor"], self.actor),
+            ("critic1", checkpoint["critic1"], self.critic1),
+            ("critic2", checkpoint["critic2"], self.critic2),
+        ]:
+            for key in state_dict:
+                if key not in model.state_dict():
+                    raise RuntimeError(
+                        f"Checkpoint key {key!r} not in {name}. "
+                        "Ensure the checkpoint was remapped (layers.0/1, out -> layer1/2/3)."
+                    )
+                c_shape = state_dict[key].shape
+                m_shape = model.state_dict()[key].shape
+                if c_shape != m_shape:
+                    raise RuntimeError(
+                        f"Checkpoint {name}.{key} shape {c_shape} does not match model shape {m_shape}. "
+                        "Instantiate TD3Agent with matching state_dim, action_dim, and hidden_dim "
+                        "(e.g. hidden_dim=512 for checkpoints saved with 512 hidden units)."
+                    )
+
+        self.actor.load_state_dict(checkpoint["actor"])
+        self.critic1.load_state_dict(checkpoint["critic1"])
+        self.critic2.load_state_dict(checkpoint["critic2"])
 
         self.actor_target.load_state_dict(self.actor.state_dict())
         self.critic1_target.load_state_dict(self.critic1.state_dict())
