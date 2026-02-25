@@ -24,17 +24,12 @@ dedicated_specs: True
 # Coordinator uses this list; each worker gets one key per round.
 # When dedicated_specs: true, run one worker per key, each with --algo X --reward_mode Y for that key.
 specs:
-  - td3-default
   - td3-attack
-  - td3-defense
-  - sac-default
-  - sac-attack
-  - sac-defense
 
 # Global training params (apply to all specs)
 training:
   total_timesteps: 10000000
-  num_envs: 12
+  num_envs: 25
   batch_size: 256
   buffer_size: 1000000
   learning_starts: 10000
@@ -60,6 +55,16 @@ training:
     sac-default-r5.pth,
     sac-attack-r5.pth,
     sac-defense-r5.pth,
+    sac_hockey_best_attack11.pth,
+    sac_hockey_best_attack12.pth,
+    td3_defense_r3.pth,
+    sac_attack_r3.pth,
+    td3_default_r2.pth,
+    td3_proven_r3.pth,
+    sac_proven_r3.pth,
+    sac_hockey_best_defensive3.pth,
+    sac_hockey_best_proven1.pth,
+    sac_hockey_best_proven3.pth
 
   ]   # training opponents: weak, strong, and/or .pth (under model_dir). Repeat an entry to use it more often (e.g. [weak, strong, weak] = 2x weak).
   evaluation_opponents: [
