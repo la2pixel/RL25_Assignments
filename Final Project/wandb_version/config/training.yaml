@@ -29,43 +29,92 @@ specs:
 # Global training params (apply to all specs)
 training:
   total_timesteps: 10000000
-  num_envs: 25
+  num_envs: 75
   batch_size: 256
   buffer_size: 5000000
   learning_starts: 10000
   update_ratio: 0.25
-  log_freq: 20000
-  eval_freq: 100000
+  log_freq: 50000
+  eval_freq: 200000
   device: null
   save_dir: checkpoints
   model_dir: opponents
   builtin_opponents: [
     weak,
     strong,
+    td3-defense-r5.pth,
+    sac-attack-r5.pth,
+    td3-defense-r4.pth,
     sac-attack-r4.pth,
     td3-defense-r3.pth,
     sac-attack-r3.pth,
-    sac_hockey_best_proven4.pth,
-    sac_hockey_best_proven2.pth,
-    sac_hockey_best_attack8.pth,
-    td3-attack-r5.pth,
+    td3-defense-r2.pth,
+    sac-attack-r2.pth,
+    td3-defense-r1.pth,
+    sac-attack-r1.pth,
     td3-default-r5.pth,
-    td3-defense-r5.pth,
-    sac_defense_r3.pth,
-    sac-default-r5.pth,
-    sac-attack-r5.pth,
-    sac-defense-r5.pth,
-    sac_hockey_best_attack11.pth,
-    sac_hockey_best_attack12.pth,
-    td3_defense_r3.pth,
-    sac_attack_r3.pth,
-    td3_default_r2.pth,
-    td3_proven_r3.pth,
     sac_proven_r3.pth,
-    sac_hockey_best_defensive3.pth,
+    td3-default-r4.pth,
+    sac_proven_r2.pth,
+    td3-default-r3.pth,
+    sac_proven_r1.pth,
+    td3-default-r2.pth,
+    sac_hockey_best_proven4.pth,
+    td3-default-r1.pth,
+    sac_hockey_best_proven3.pth,
+    td3-attack-r5.pth,
+    sac_hockey_best_proven2.pth,
+    td3-attack-r4.pth,
     sac_hockey_best_proven1.pth,
-    sac_hockey_best_proven3.pth
-
+    td3-attack-r3.pth,
+    sac_hockey_best_defensive3.pth,
+    td3-attack-r2.pth,
+    sac_hockey_best_defensive2.pth,
+    td3-attack-r1.pth,
+    sac_hockey_best_defensive1.pth,
+    td3_proven_r3.pth,
+    sac_hockey_best_attack12.pth,
+    td3_proven_r2.pth,
+    sac_hockey_best_attack11.pth,
+    td3_proven_r1.pth,
+    sac_hockey_best_attack10.pth,
+    td3_defense_r3.pth,
+    sac_hockey_best_attack9.pth,
+    td3_defense_r2.pth,
+    sac_hockey_best_attack8.pth,
+    td3_defense_r1.pth,
+    sac_hockey_best_attack7.pth,
+    td3_default_r3.pth,
+    sac_hockey_best_attack6.pth,
+    td3_default_r2.pth,
+    sac_hockey_best_attack5.pth,
+    td3_default_r1.pth,
+    sac_hockey_best_attack4.pth,
+    td3_attack_r3.pth,
+    sac_hockey_best_attack3.pth,
+    td3_attack_r2.pth,
+    sac_hockey_best_attack2.pth,
+    td3_attack_r1.pth,
+    sac_hockey_best_attack1.pth,
+    sac-defense-r5.pth,
+    sac_defense_r3.pth,
+    sac-defense-r4.pth,
+    sac_defense_r2.pth,
+    sac-defense-r3.pth,
+    sac_defense_r1.pth,
+    sac-defense-r2.pth,
+    sac_default_r3.pth,
+    sac-defense-r1.pth,
+    sac_default_r2.pth,
+    sac-default-r5.pth,
+    sac_default_r1.pth,
+    sac-default-r4.pth,
+    sac_attack_r3.pth,
+    sac-default-r3.pth,
+    sac_attack_r2.pth,
+    sac-default-r2.pth,
+    sac_attack_r1.pth,
+    sac-default-r1.pth
   ]   # training opponents: weak, strong, and/or .pth (under model_dir). Repeat an entry to use it more often (e.g. [weak, strong, weak] = 2x weak).
   evaluation_opponents: [
     sac_hockey_best_attack11.pth,
@@ -80,8 +129,8 @@ training:
     sac_hockey_best_proven3.pth
   ]
   # TD3 defaults
-  policy_lr: 1.0e-4
-  critic_lr: 1.0e-4
+  policy_lr: 3.0e-4
+  critic_lr: 3.0e-4
   gamma: 0.99
   polyak: 0.995
   act_noise_std: 0.1
