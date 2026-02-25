@@ -7,9 +7,9 @@ import numpy as np
 class Actor(nn.Module):
     def __init__(self, state_dim, action_dim, dropout):
         super(Actor, self).__init__()
-        self.layer1 = nn.Linear(state_dim, 512)
-        self.layer2 = nn.Linear(512, 512)
-        self.layer3 = nn.Linear(512, action_dim)
+        self.layer1 = nn.Linear(state_dim, 1024)
+        self.layer2 = nn.Linear(1024, 1024)
+        self.layer3 = nn.Linear(1024, action_dim)
 
         self.dropout = nn.Dropout(p=dropout)
 
@@ -23,9 +23,9 @@ class Actor(nn.Module):
 class Critic(nn.Module):
     def __init__(self, state_dim, action_dim, dropout):
         super(Critic, self).__init__()
-        self.layer1 = nn.Linear(state_dim + action_dim, 512)
-        self.layer2 = nn.Linear(512, 512)
-        self.layer3 = nn.Linear(512, 1)
+        self.layer1 = nn.Linear(state_dim + action_dim, 1024)
+        self.layer2 = nn.Linear(1024, 1024)
+        self.layer3 = nn.Linear(1024, 1)
 
         self.dropout = nn.Dropout(p=dropout)
 
