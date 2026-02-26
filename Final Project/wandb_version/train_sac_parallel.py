@@ -396,6 +396,8 @@ def train_parallel(args):
                 agent.save(os.path.join(args.save_dir, "sac_hockey_best.pth"))
                 print(f"  >>> NEW BEST MODEL! <<<")
 
+            # Log saving part is removed for the wandb runs. But you can find the logs that I used for the plots in sac_improvement_plots folder.
+
             agent.save(os.path.join(args.save_dir, "sac_hockey_latest.pth"))
 
     envs.close()
