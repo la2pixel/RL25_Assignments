@@ -1,0 +1,74 @@
+{
+  "groups": [
+    {
+      "name": "phase2_round1_models",
+      "models": [
+        "models/phase2_r1/sac-attack-r1.pth",
+        "models/phase2_r1/sac-default-r1.pth",
+        "models/phase2_r1/sac-defense-r1.pth",
+        "models/phase2_r1/td3-attack-r1.pth",
+        "models/phase2_r1/td3-default-r1.pth",
+        "models/phase2_r1/td3-defense-r1.pth"
+      ]
+    },
+    {
+      "name": "phase2_round2_models",
+      "models": [
+        "models/phase2_r2/sac-attack-r2.pth",
+        "models/phase2_r2/sac-default-r2.pth",
+        "models/phase2_r2/sac-defense-r2.pth",
+        "models/phase2_r2/td3-attack-r2.pth",
+        "models/phase2_r2/td3-default-r2.pth",
+        "models/phase2_r2/td3-defense-r2.pth"
+      ]
+    },
+    {
+      "name": "phase2_round3_models",
+      "models": [
+        "models/phase2_r3/sac-attack-r3.pth",
+        "models/phase2_r3/sac-default-r3.pth",
+        "models/phase2_r3/sac-defense-r3.pth",
+        "models/phase2_r3/td3-attack-r3.pth",
+        "models/phase2_r3/td3-default-r3.pth",
+        "models/phase2_r3/td3-defense-r3.pth"
+      ]
+    },
+    {
+      "name": "phase2_round4_models",
+      "models": [
+        "models/phase2_r4/sac-attack-r4.pth",
+        "models/phase2_r4/sac-default-r4.pth",
+        "models/phase2_r4/sac-defense-r4.pth",
+        "models/phase2_r4/td3-attack-r4.pth",
+        "models/phase2_r4/td3-default-r4.pth",
+        "models/phase2_r4/td3-defense-r4.pth"
+      ]
+    },
+    {
+      "name": "phase2_round5_models",
+      "models": [
+        "models/phase2_r5/sac-attack-r5.pth",
+        "models/phase2_r5/sac-default-r5.pth",
+        "models/phase2_r5/sac-defense-r5.pth",
+        "models/phase2_r5/td3-attack-r5.pth",
+        "models/phase2_r5/td3-default-r5.pth",
+        "models/phase2_r5/td3-defense-r5.pth"
+      ]
+    }
+  ],
+  "evaluation_group": {
+    "name": "eval_set",
+    "models": [
+      "models/eval_models/sac_attack_r3.pth",
+      "models/eval_models/sac_hockey_best_attack11.pth",
+      "models/eval_models/sac_hockey_best_attack12.pth",
+      "models/eval_models/sac_hockey_best_defensive3.pth",
+      "models/eval_models/sac_hockey_best_proven1.pth",
+      "models/eval_models/sac_hockey_best_proven3.pth",
+      "models/eval_models/sac_proven_r3.pth",
+      "models/eval_models/td3_default_r2.pth",
+      "models/eval_models/td3_defense_r3.pth",
+      "models/eval_models/td3_proven_r3.pth"
+    ]
+  }
+}
