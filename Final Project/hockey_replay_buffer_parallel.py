@@ -16,7 +16,7 @@ class ReplayBuffer:
         self.dones    = torch.zeros((size, 1), dtype=torch.float32, device=device)
 
     def add(self, obs, action, reward, next_obs, done):
-        """Single sample add (Compatibility mode)"""
+        """Single sample add"""
         if isinstance(obs, np.ndarray): obs = torch.from_numpy(obs).to(self.device)
         if isinstance(action, np.ndarray): action = torch.from_numpy(action).to(self.device)
         if isinstance(reward, np.ndarray): reward = torch.from_numpy(reward).to(self.device)
@@ -91,16 +91,6 @@ class PrioritizedReplayBuffer(ReplayBuffer):
     """
     Prioritized Experience Replay buffer.
     
-    Samples transitions with probability proportional to their TD error.
-    
-    Parameters
-    ----------
-    size : int
-        Maximum buffer size
-    alpha : float
-        Priority exponent (0 = uniform, 1 = full prioritization)
-    beta : float
-        Importance sampling exponent (annealed to 1)
     """
     
     def __init__(self, size, alpha=0.6, beta=0.4):

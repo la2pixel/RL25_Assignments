@@ -4,18 +4,6 @@ Soft Actor-Critic (SAC) with optional Pink Noise Exploration.
 When pink_noise=False (default): Standard SAC with white Gaussian exploration.
 When pink_noise=True: Temporally correlated pink noise replaces iid Gaussian sampling.
 
-Reference: Eberhard et al. (2023) "Pink Noise Is All You Need: Colored Noise
-Exploration in Deep Reinforcement Learning" (ICLR 2023 Spotlight)
-
-The key idea: Standard SAC samples actions from a Gaussian with iid noise at
-each timestep (white noise). This produces jittery, uncorrelated exploration.
-Pink noise (1/f noise, beta=1) is temporally correlated — consecutive samples
-are similar, producing smooth, sustained exploration trajectories. This helps
-discover multi-step action sequences needed for tasks like hitting a puck.
-
-Implementation: We generate pink noise sequences in the frequency domain using
-the Timmer & König (1995) algorithm, pre-buffer them, and use them as the
-noise source for the reparameterization trick instead of iid Gaussian samples.
 """
 
 import torch
@@ -24,10 +12,6 @@ import torch.nn.functional as F
 from torch.distributions import Normal
 import numpy as np
 
-
-# ============================================================
-# Pink Noise Generator (Timmer & König 1995)
-# ============================================================
 
 def powerlaw_psd_gaussian(beta, size, fmin=0, rng=None):
     """
@@ -67,10 +51,8 @@ def powerlaw_psd_gaussian(beta, size, fmin=0, rng=None):
         samples = size[-1]
         shape_prefix = size[:-1]
     
-    # Frequencies for rfft
     f = np.fft.rfftfreq(samples)
     
-    # Minimum frequency
     if fmin <= 0:
         fmin = 1.0 / samples  # default: lowest non-zero frequency
     
@@ -78,21 +60,16 @@ def powerlaw_psd_gaussian(beta, size, fmin=0, rng=None):
     s_scale = np.where(f < fmin, fmin, f)
     s_scale = s_scale ** (-beta / 2.0)
     
-    # Generate random complex coefficients
     dims = shape_prefix + (len(f),)
     sr = rng.normal(size=dims)
     si = rng.normal(size=dims)
     
-    # DC and Nyquist components must be real
     if samples % 2 == 0:
         si[..., -1] = 0
         sr[..., 0] = sr[..., 0] * np.sqrt(2)
     si[..., 0] = 0
     
-    # Combine and scale by PSD
     s = (sr + 1j * si) * s_scale
-    
-    # Inverse FFT to time domain
     y = np.fft.irfft(s, n=samples, axis=-1)
     
     # Normalize to unit variance
@@ -107,20 +84,6 @@ class ColoredNoiseProcess:
     """
     Generates temporally correlated noise for exploration.
     
-    Pre-generates a buffer of colored noise and steps through it.
-    When the buffer is exhausted, a new one is generated.
-    
-    For SAC: This replaces the iid Gaussian sampling in the
-    reparameterization trick with temporally correlated samples.
-    
-    Parameters
-    ----------
-    beta : float
-        Noise color exponent (1.0 = pink)
-    action_dim : int
-        Dimensionality of noise
-    seq_len : int
-        Buffer length (typically episode length or longer)
     """
     
     def __init__(self, beta, action_dim, seq_len=1000, rng=None):
@@ -170,10 +133,6 @@ class ColoredNoiseProcess:
         """Reset the noise process (generate fresh buffer)."""
         self._generate_buffer()
 
-
-# ============================================================
-# Actor
-# ============================================================
 
 class Actor(nn.Module):
     """
@@ -251,7 +210,7 @@ class Actor(nn.Module):
         action = torch.tanh(x)
         
         if with_logprob:
-            # Log prob (same formula regardless of noise source)
+            # Log prob 
             var = std ** 2
             log_prob = -0.5 * ((x - mean) ** 2 / var + 2 * log_std + np.log(2 * np.pi))
             log_prob -= torch.log(1 - action.pow(2) + 1e-6)
@@ -260,10 +219,6 @@ class Actor(nn.Module):
         
         return action, None
 
-
-# ============================================================
-# Critics
-# ============================================================
 
 class Critic(nn.Module):
     def __init__(self, obs_dim, action_dim, hidden_sizes=[256, 256]):
@@ -299,9 +254,6 @@ class TwinCritic(nn.Module):
         return self.critic1(obs, action), self.critic2(obs, action)
 
 
-# ============================================================
-# SAC Agent
-# ============================================================
 
 class SAC:
     """
@@ -425,10 +377,6 @@ class SAC:
         """
         Standard SAC update (critic, actor, alpha, soft target).
         
-        NOTE: Updates always use iid Gaussian (standard reparameterization).
-        Pink noise only affects action SELECTION during rollouts.
-        The policy is still a Gaussian — we just sample from it differently
-        when collecting data.
         """
         obs_batch, act_batch, rew_batch, next_obs_batch, done_batch = \
             replay_buffer.sample(batch_size)
