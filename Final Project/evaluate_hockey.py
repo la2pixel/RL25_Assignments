@@ -7,14 +7,14 @@ Single-model usage:
     python evaluate_hockey.py --model_path checkpoints/td3_hockey_best.pth --opponent strong
     python evaluate_hockey.py --model_path checkpoints/agent_v1.pth --opponent_model checkpoints/agent_v2.pth
 
-Group vs evaluation-group usage:
+Group evaluation (requires --config):
     python evaluate_hockey.py --config eval_config.json --num_episodes 10 --output_dir eval_results
-    Or set GROUPS and EVALUATION_GROUP below and run with --config to use in-script config.
 """
 
 import argparse
 import json
 import os
+import re
 import sys
 from collections import defaultdict
 from datetime import datetime
@@ -29,51 +29,14 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from hockey_sac import SAC
 from hockey_td3 import TD3Agent
 
-# ---------------------------------------------------------------------------
-# Default config for group vs evaluation-group evaluation (edit as needed)
-# ---------------------------------------------------------------------------
-GROUPS = [
-    {"name": "phase2_round2_models", "models": ["models/agent1.pth", "models/agent2.pth"]},
-]
-EVALUATION_GROUP = {"name": "eval_group", "models": ["models/eval.pth", "strong"]}
-
-
-def resolve_spec(spec_str):
-    """Resolve a model spec string to a descriptor and display name.
-    spec_str: path to .pth or 'weak' or 'strong'.
-    Returns (descriptor, display_name). descriptor is {'type': 'builtin', 'weak': bool} or {'type': 'model', 'path': path}.
-    """
-    s = spec_str.strip().lower()
-    if s == "weak":
-        return ({"type": "builtin", "weak": True}, "weak")
-    if s == "strong":
-        return ({"type": "builtin", "weak": False}, "strong")
-    path = spec_str.strip()
-    name = path.replace(".pth", "") if path.endswith(".pth") else path
-    return ({"type": "model", "path": path}, name)
-
-
-def _model_display_name(spec_str):
-    """Display name for a model spec (path without .pth, or 'weak'/'strong')."""
-    _, name = resolve_spec(spec_str)
-    return name
-
-
-def short_model_name(name):
-    """Use only the ending for display, e.g. models/phase2_r5/sac-attack-r5 -> sac-attack-r5."""
-    if name in ("weak", "strong"):
-        return name
-    return os.path.basename(name)
-
 
 def model_name_to_spec(model_name):
     """Derive algorithm-reward spec from model name, e.g. sac-attack-r1 -> sac-attack, td3-defense-r5 -> td3-defense."""
-    import re
-    short = short_model_name(model_name)
-    if short in ("weak", "strong"):
-        return short
-    m = re.match(r"^(.+)-r\d+$", short, re.IGNORECASE)
-    return m.group(1) if m else short
+    if model_name in ("weak", "strong"):
+        return model_name
+    # AI Usage: asked AI for regex to strip the round suffix (e.g. -r1, -r5) from model names
+    m = re.match(r"^(.+)-r\d+$", model_name, re.IGNORECASE)
+    return m.group(1) if m else model_name
 
 
 class _BuiltinAgentWrapper:
@@ -86,13 +49,12 @@ class _BuiltinAgentWrapper:
         return self._opp.act(obs)
 
 
-def load_agent(descriptor, obs_dim, action_dim, device, hidden_sizes, cache):
-    """Load a trained agent from descriptor. For builtin returns None (caller uses BasicOpponent).
-    cache: dict path -> agent; used and updated for model descriptors.
+def load_agent(path, obs_dim, action_dim, device, hidden_sizes, cache):
+    """Load a trained agent from a file path. Returns None for builtin opponents ('weak'/'strong').
+    cache: dict path -> agent; avoids reloading the same model.
     """
-    if descriptor["type"] == "builtin":
+    if path in ("weak", "strong"):
         return None
-    path = descriptor["path"]
     if path in cache:
         return cache[path]
     agent_type = "td3" if "td3" in path.lower() else "sac"
@@ -199,36 +161,40 @@ def evaluate(env, agent1, num_episodes=10, render=False, max_steps=500,
 
 def run_group_evaluation(groups, evaluation_group, env, h_env, n_episodes, max_steps, device,
                          hidden_sizes):
-    """Run each model in each group vs each model in the evaluation group. Returns raw_results:
-    list of dicts with group_name, model_a_name, eval_opponent_name, mean_reward, std_reward, wins, losses, draws, n_episodes.
-    Uses a progress bar; per-matchup output is suppressed.
+    """Run each model in each group vs each model in the evaluation group.
+    Model entries are dicts with 'path' and 'name' keys.
+    Returns raw_results: list of dicts with group_name, model_a_name, eval_opponent_name, stats.
     """
     obs_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0] // 2
     cache = {}
     raw_results = []
-    eval_specs = [resolve_spec(m) for m in evaluation_group["models"]]
-    total = sum(len(g["models"]) * len(eval_specs) for g in groups)
+    eval_models = evaluation_group["models"]
+    total = sum(len(g["models"]) * len(eval_models) for g in groups)
     n_done = 0
 
     for group in groups:
         group_name = group["name"]
-        for model_spec_str in group["models"]:
-            desc_a, model_a_name = resolve_spec(model_spec_str)
-            agent1 = load_agent(desc_a, obs_dim, action_dim, device, hidden_sizes, cache)
+        for model_entry in group["models"]:
+            model_a_path = model_entry["path"]
+            model_a_name = model_entry["name"]
+            agent1 = load_agent(model_a_path, obs_dim, action_dim, device, hidden_sizes, cache)
             if agent1 is None:
-                agent1 = _BuiltinAgentWrapper(h_env.BasicOpponent(weak=desc_a["weak"]))
+                agent1 = _BuiltinAgentWrapper(h_env.BasicOpponent(weak=(model_a_path.lower() == "weak")))
 
-            for (desc_b, eval_opponent_name) in eval_specs:
+            for eval_entry in eval_models:
+                eval_path = eval_entry["path"]
+                eval_opponent_name = eval_entry["name"]
+                # AI Usage: asked AI how to generate reproducible seeds from model name pairs
                 base_seed = hash((model_a_name, eval_opponent_name)) % (2 ** 32)
                 seeds = [int(s) for s in np.random.RandomState(base_seed).randint(0, 10000, size=n_episodes)]
 
-                if desc_b["type"] == "builtin":
-                    opponent_agent = h_env.BasicOpponent(weak=desc_b["weak"])
+                if eval_path.lower() in ("weak", "strong"):
+                    opponent_agent = h_env.BasicOpponent(weak=(eval_path.lower() == "weak"))
                     opponent_model = None
                 else:
                     opponent_agent = None
-                    opponent_model = load_agent(desc_b, obs_dim, action_dim, device, hidden_sizes, cache)
+                    opponent_model = load_agent(eval_path, obs_dim, action_dim, device, hidden_sizes, cache)
 
                 stats = evaluate(
                     env, agent1, num_episodes=n_episodes, render=False, max_steps=max_steps,
@@ -258,9 +224,6 @@ def run_group_evaluation(groups, evaluation_group, env, h_env, n_episodes, max_s
 def aggregate_results(raw_results):
     """Aggregate raw results into per-model, per-group, and best-per-group.
     Returns (per_model, per_group, best_per_group).
-    per_model: dict (group_name, model_a_name) -> {mean_reward, std_reward, wins, losses, draws, n_games, win_rate, draw_rate, loss_rate}
-    per_group: dict group_name -> {mean_reward, std_reward, wins, losses, draws, n_games, win_rate, draw_rate, loss_rate}
-    best_per_group: dict group_name -> model_a_name (best = argmax over models of mean_reward)
     """
     model_w = defaultdict(lambda: {"rewards": [], "stds": [], "wins": 0, "losses": 0, "draws": 0, "n": 0})
     for r in raw_results:
@@ -277,7 +240,7 @@ def aggregate_results(raw_results):
         n = w["n"]
         per_model[(group_name, model_a_name)] = {
             "mean_reward": np.mean(w["rewards"]),
-            "std_reward": np.mean(w["stds"]),  # mean of stds across opponents
+            "std_reward": np.mean(w["stds"]),
             "wins": w["wins"], "losses": w["losses"], "draws": w["draws"], "n_games": n,
             "win_rate": 100.0 * w["wins"] / n if n else 0,
             "draw_rate": 100.0 * w["draws"] / n if n else 0,
@@ -317,9 +280,7 @@ def aggregate_results(raw_results):
 
 
 def aggregate_by_spec(per_model):
-    """Aggregate per_model across groups (rounds) by algorithm-reward spec.
-    Returns per_spec: dict spec_name -> {mean_reward, std_reward, wins, losses, draws, n_games, win_rate, draw_rate, loss_rate}.
-    """
+    """Aggregate per_model across groups (rounds) by algorithm-reward spec."""
     spec_w = defaultdict(lambda: {"means": [], "stds": [], "wins": 0, "losses": 0, "draws": 0, "n": 0})
     for (group_name, model_a_name), stats in per_model.items():
         spec = model_name_to_spec(model_a_name)
@@ -343,8 +304,9 @@ def aggregate_by_spec(per_model):
     return per_spec
 
 
-def plot_within_group_return(per_model, best_per_group, output_dir):
-    """One figure per group: horizontal bar chart of mean reward +/- std; highlight best model (highest mean)."""
+def plot_within_group_reward(per_model, best_per_group, output_dir):
+    """One figure per group: horizontal bar chart of mean reward +/- std; highlight best model."""
+    # AI Usage: asked AI how to create horizontal bar charts with error bars and highlight the best model
     os.makedirs(output_dir, exist_ok=True)
     groups = sorted({g for (g, _) in per_model})
     for group_name in groups:
@@ -353,7 +315,6 @@ def plot_within_group_return(per_model, best_per_group, output_dir):
             continue
         means = [per_model[(group_name, m)]["mean_reward"] for m in models_in_group]
         stds = [per_model[(group_name, m)]["std_reward"] for m in models_in_group]
-        labels = [short_model_name(m) for m in models_in_group]
         best = best_per_group.get(group_name)
         colors = ["#2ecc71" if m == best else "#3498db" for m in models_in_group]
         y_pos = np.arange(len(models_in_group))
@@ -368,7 +329,7 @@ def plot_within_group_return(per_model, best_per_group, output_dir):
             bars[idx].set_linewidth(2.5)
             bars[idx].set_edgecolor("black")
         ax.set_yticks(y_pos)
-        ax.set_yticklabels(labels, fontsize=9)
+        ax.set_yticklabels(models_in_group, fontsize=9)
         ax.set_xlabel("Mean reward")
         ax.set_ylabel("Model")
         ax.set_title(f"Mean reward vs evaluation group — {group_name}\n(best (highest mean), highlighted)")
@@ -379,8 +340,9 @@ def plot_within_group_return(per_model, best_per_group, output_dir):
         plt.close(fig)
 
 
-def plot_group_level_return(per_group, output_dir):
+def plot_group_level_reward(per_group, output_dir):
     """One bar chart: group names vs aggregate mean reward with std"""
+    # AI Usage: asked AI how to create bar charts with error bars and best-group highlighting
     os.makedirs(output_dir, exist_ok=True)
     group_names = sorted(per_group.keys())
     means = [per_group[g]["mean_reward"] for g in group_names]
@@ -410,13 +372,13 @@ def plot_group_level_return(per_group, output_dir):
 
 def plot_within_group_wdl(per_model, best_per_group, output_dir):
     """One figure per group: stacked bar (win% / draw% / loss%) per model."""
+    # AI Usage: asked AI how to create stacked bar charts with percentage labels inside bars
     os.makedirs(output_dir, exist_ok=True)
     groups = sorted({g for (g, _) in per_model})
     for group_name in groups:
         models_in_group = sorted([m for (g, m) in per_model if g == group_name])
         if not models_in_group:
             continue
-        labels = [short_model_name(m) for m in models_in_group]
         win_rates = [per_model[(group_name, m)]["win_rate"] for m in models_in_group]
         draw_rates = [per_model[(group_name, m)]["draw_rate"] for m in models_in_group]
         loss_rates = [per_model[(group_name, m)]["loss_rate"] for m in models_in_group]
@@ -433,7 +395,7 @@ def plot_within_group_wdl(per_model, best_per_group, output_dir):
                     ax.text(i, bottom + rate / 2, f"{rate:.0f}%", ha="center", va="center", fontsize=7)
                 bottom += rate
         ax.set_xticks(x)
-        ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=9)
+        ax.set_xticklabels(models_in_group, rotation=45, ha="right", fontsize=9)
         ax.set_ylabel("Rate (%)")
         ax.set_xlabel("Model")
         ax.set_title(f"Win / Draw / Loss vs evaluation group — {group_name}")
@@ -447,6 +409,7 @@ def plot_within_group_wdl(per_model, best_per_group, output_dir):
 
 def plot_group_level_wdl(per_group, output_dir):
     """One stacked bar chart: win% / draw% / loss% per group."""
+    # AI Usage: asked AI how to create stacked bar charts with percentage labels inside bars
     os.makedirs(output_dir, exist_ok=True)
     group_names = sorted(per_group.keys())
     win_rates = [per_group[g]["win_rate"] for g in group_names]
@@ -476,8 +439,9 @@ def plot_group_level_wdl(per_group, output_dir):
     plt.close(fig)
 
 
-def plot_spec_return(per_spec, output_dir):
-    """Bar chart: mean reward ± std per algorithm-reward spec (average across groups/rounds)."""
+def plot_spec_reward(per_spec, output_dir):
+    """Bar chart: mean reward +/- std per algorithm-reward spec (average across groups/rounds)."""
+    # AI Usage: asked AI how to create bar charts with error bars
     os.makedirs(output_dir, exist_ok=True)
     spec_names = sorted(per_spec.keys())
     if not spec_names:
@@ -491,7 +455,7 @@ def plot_spec_return(per_spec, output_dir):
     ax.set_xticks(x)
     ax.set_xticklabels(spec_names, rotation=45, ha="right")
     ax.set_ylabel("Mean reward (aggregate across rounds)")
-    ax.set_xlabel("Algorithm–reward spec")
+    ax.set_xlabel("Algorithm-reward spec")
     ax.set_title("Average spec performance vs evaluation group (across rounds)")
     ax.axhline(0, color="gray", linestyle="--", linewidth=0.8)
     fig.tight_layout()
@@ -501,6 +465,7 @@ def plot_spec_return(per_spec, output_dir):
 
 def plot_spec_wdl(per_spec, output_dir):
     """Stacked bar: win% / draw% / loss% per algorithm-reward spec (average across groups/rounds)."""
+    # AI Usage: asked AI how to create stacked bar charts with percentage labels inside bars
     os.makedirs(output_dir, exist_ok=True)
     spec_names = sorted(per_spec.keys())
     if not spec_names:
@@ -523,7 +488,7 @@ def plot_spec_wdl(per_spec, output_dir):
     ax.set_xticks(x)
     ax.set_xticklabels(spec_names, rotation=45, ha="right")
     ax.set_ylabel("Rate (%)")
-    ax.set_xlabel("Algorithm–reward spec")
+    ax.set_xlabel("Algorithm-reward spec")
     ax.set_title("Average spec Win / Draw / Loss vs evaluation group (across rounds)")
     ax.legend(loc="lower right")
     ax.set_ylim(0, 100)
@@ -532,61 +497,8 @@ def plot_spec_wdl(per_spec, output_dir):
     plt.close(fig)
 
 
-def write_1v1_csv_and_print_table(raw_results, output_dir, round_name=None):
-    """Build 1v1 table (player1 vs player2, mean_reward ± std, win/draw/loss rate), sort by mean reward, write CSV and print table.
-    If round_name is given, only include results with that round_name and use it in the filename and header."""
-    import csv
-    os.makedirs(output_dir, exist_ok=True)
-    if round_name is not None:
-        subset = [r for r in raw_results if r.get("round_name") == round_name]
-    else:
-        subset = raw_results
-    rows = []
-    for r in subset:
-        n = r["n_episodes"]
-        wr = 100.0 * r["wins"] / n if n else 0
-        dr = 100.0 * r["draws"] / n if n else 0
-        lr = 100.0 * r["losses"] / n if n else 0
-        mean_std = f"{r['mean_reward']:.2f} ± {r['std_reward']:.2f}"
-        rows.append({
-            "player1": r["model_a_name"],
-            "player2": r["eval_opponent_name"],
-            "mean_reward_std": mean_std,
-            "mean_reward": r["mean_reward"],
-            "std_reward": r["std_reward"],
-            "win_rate": wr,
-            "draw_rate": dr,
-            "loss_rate": lr,
-        })
-    rows.sort(key=lambda x: x["mean_reward"], reverse=True)
-    safe = f"_{round_name}" if round_name else ""
-    csv_path = os.path.join(output_dir, f"1v1_results{safe}.csv")
-    with open(csv_path, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=["player1", "player2", "mean_reward_std", "mean_reward", "std_reward", "win_rate", "draw_rate", "loss_rate"])
-        w.writeheader()
-        w.writerows(rows)
-    title = f"1v1 performance — {round_name} (sorted by mean reward)" if round_name else "1v1 performance (sorted by mean reward)"
-    print(f"\n{title}")
-    print("-" * 115)
-    fmt_h = "{:<28} {:<28} {:>18} {:>8} {:>8} {:>8}"
-    fmt_r = "{:<28} {:<28} {:>18} {:>7.1f}% {:>7.1f}% {:>7.1f}%"
-    print(fmt_h.format("Player 1", "Player 2", "Mean reward ± std", "Win%", "Draw%", "Loss%"))
-    print("-" * 115)
-    for r in rows:
-        p1 = short_model_name(r["player1"])
-        p2 = short_model_name(r["player2"])
-        if len(p1) > 27:
-            p1 = p1[:24] + "..."
-        if len(p2) > 27:
-            p2 = p2[:24] + "..."
-        mean_std = f"{r['mean_reward']:.2f} ± {r['std_reward']:.2f}"
-        print(fmt_r.format(p1, p2, mean_std, r["win_rate"], r["draw_rate"], r["loss_rate"]))
-    print("-" * 115)
-    print(f"CSV saved to {csv_path}")
-
-
 def main():
-    parser = argparse.ArgumentParser(description='Evaluate SAC Agent')
+    parser = argparse.ArgumentParser(description='Evaluate SAC or TD3 Agent')
     parser.add_argument('--model_path', type=str, default=None, help='Single model path (optional if using group eval)')
     parser.add_argument('--opponent_model', type=str, default=None)
     parser.add_argument('--opponent', type=str, default='weak', choices=['weak', 'strong'])
@@ -595,7 +507,7 @@ def main():
     parser.add_argument('--max_steps', type=int, default=500)
     parser.add_argument('--hidden_sizes', type=int, nargs='+', default=[512, 512])
     parser.add_argument('--device', type=str, default=None)
-    parser.add_argument('--config', type=str, default=None, help='JSON config with "groups" and "evaluation_group" for group eval')
+    parser.add_argument('--config', type=str, default=None, help='JSON config for group eval (required when --model_path is not set)')
     parser.add_argument('--output_dir', type=str, default='eval_results', help='Where to save plots and results (group eval)')
     parser.add_argument('--quiet', action='store_true', help='Less per-episode output during group eval')
 
@@ -613,93 +525,40 @@ def main():
 
     use_group_eval = args.model_path is None
     if use_group_eval:
-        if args.config:
-            with open(args.config, "r") as f:
-                cfg = json.load(f)
-            round_matchups_meta = None
-            if "round_matchups" in cfg:
-                round_matchups_meta = cfg["round_matchups"]
-                groups = []
-                for entry in round_matchups_meta:
-                    groups.append(entry["defensive"])
-                    groups.append(entry["offensive"])
-                    if "default" in entry:
-                        groups.append(entry["default"])
-            elif "pairwise_groups" in cfg:
-                pair = cfg["pairwise_groups"]
-                if len(pair) != 2:
-                    print("pairwise_groups must contain exactly two groups.")
-                    return
-                groups = pair
-                evaluation_group = None
-            else:
-                groups = cfg["groups"]
-                evaluation_group = cfg["evaluation_group"]
-        else:
-            groups = GROUPS
-            evaluation_group = EVALUATION_GROUP
-            round_matchups_meta = None
+        if not args.config:
+            print("Error: --config is required for group evaluation.")
+            return
+
+        with open(args.config, "r") as f:
+            cfg = json.load(f)
+
+        groups = cfg["groups"]
+        evaluation_group = cfg["evaluation_group"]
+
         env = h_env.HockeyEnv()
-        if round_matchups_meta is not None:
-            print("Running round matchups (defensive vs offensive vs default per round)...")
-            raw_results = []
-            for entry in round_matchups_meta:
-                rname = entry["name"]
-                def_grp, off_grp = entry["defensive"], entry["offensive"]
-                pairs = [(def_grp, off_grp), (off_grp, def_grp)]
-                if "default" in entry:
-                    default_grp = entry["default"]
-                    pairs.extend([(def_grp, default_grp), (default_grp, def_grp), (off_grp, default_grp), (default_grp, off_grp)])
-                for grp_a, grp_b in pairs:
-                    r_ab = run_group_evaluation(
-                        [grp_a], grp_b, env, h_env,
-                        n_episodes=args.num_episodes, max_steps=args.max_steps, device=device,
-                        hidden_sizes=args.hidden_sizes
-                    )
-                    for r in r_ab:
-                        r["round_name"] = rname
-                    raw_results.extend(r_ab)
-        elif evaluation_group is not None:
-            print("Running group vs evaluation-group evaluation...")
-            raw_results = run_group_evaluation(
-                groups, evaluation_group, env, h_env,
-                n_episodes=args.num_episodes, max_steps=args.max_steps, device=device,
-                hidden_sizes=args.hidden_sizes
-            )
-        else:
-            print("Running pairwise evaluation (each group vs the other)...")
-            raw_a = run_group_evaluation(
-                [groups[0]], groups[1], env, h_env,
-                n_episodes=args.num_episodes, max_steps=args.max_steps, device=device,
-                hidden_sizes=args.hidden_sizes
-            )
-            raw_b = run_group_evaluation(
-                [groups[1]], groups[0], env, h_env,
-                n_episodes=args.num_episodes, max_steps=args.max_steps, device=device,
-                hidden_sizes=args.hidden_sizes
-            )
-            raw_results = raw_a + raw_b
+        print("Running group vs evaluation-group evaluation...")
+        raw_results = run_group_evaluation(
+            groups, evaluation_group, env, h_env,
+            n_episodes=args.num_episodes, max_steps=args.max_steps, device=device,
+            hidden_sizes=args.hidden_sizes
+        )
+
         os.makedirs(args.output_dir, exist_ok=True)
-        if round_matchups_meta is not None:
-            for entry in round_matchups_meta:
-                write_1v1_csv_and_print_table(raw_results, args.output_dir, round_name=entry["name"])
-            out = {"raw_results": raw_results}
-        else:
-            per_model, per_group, best_per_group = aggregate_results(raw_results)
-            plot_within_group_return(per_model, best_per_group, args.output_dir)
-            plot_group_level_return(per_group, args.output_dir)
-            plot_within_group_wdl(per_model, best_per_group, args.output_dir)
-            plot_group_level_wdl(per_group, args.output_dir)
-            per_spec = aggregate_by_spec(per_model)
-            plot_spec_return(per_spec, args.output_dir)
-            plot_spec_wdl(per_spec, args.output_dir)
-            out = {
-                "raw_results": raw_results,
-                "per_model": {f"{g}|{m}": v for (g, m), v in per_model.items()},
-                "per_group": per_group,
-                "best_per_group": best_per_group,
-                "per_spec": per_spec,
-            }
+        per_model, per_group, best_per_group = aggregate_results(raw_results)
+        plot_within_group_reward(per_model, best_per_group, args.output_dir)
+        plot_group_level_reward(per_group, args.output_dir)
+        plot_within_group_wdl(per_model, best_per_group, args.output_dir)
+        plot_group_level_wdl(per_group, args.output_dir)
+        per_spec = aggregate_by_spec(per_model)
+        plot_spec_reward(per_spec, args.output_dir)
+        plot_spec_wdl(per_spec, args.output_dir)
+        out = {
+            "raw_results": raw_results,
+            "per_model": {f"{g}|{m}": v for (g, m), v in per_model.items()},
+            "per_group": per_group,
+            "best_per_group": best_per_group,
+            "per_spec": per_spec,
+        }
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         results_path = os.path.join(args.output_dir, f"results_{ts}.json")
         with open(results_path, "w") as f:

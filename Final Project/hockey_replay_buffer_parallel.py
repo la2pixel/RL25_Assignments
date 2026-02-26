@@ -1,11 +1,6 @@
 import numpy as np
 import torch
 
-import numpy as np
-import torch
-import numpy as np
-import torch
-
 class ReplayBuffer:
     def __init__(self, obs_dim, action_dim, size, device):
         self.max_size = size
