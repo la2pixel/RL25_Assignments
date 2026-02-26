@@ -21,25 +21,6 @@ def powerlaw_psd_gaussian(beta, size, fmin=0, rng=None):
     beta=1: pink noise (1/f, the sweet spot per the paper)
     beta=2: red/Brownian noise (strong correlation)
     
-    Based on the algorithm from:
-    Timmer, J. and König, M. (1995) "On generating power law noise"
-    Astronomy and Astrophysics, 300, 707-710
-    
-    Parameters
-    ----------
-    beta : float
-        Exponent of the power law. 1.0 = pink noise.
-    size : tuple or int
-        Shape of output. Last dimension is the time axis.
-    fmin : float
-        Low-frequency cutoff (0 = no cutoff)
-    rng : np.random.Generator
-        Random number generator
-        
-    Returns
-    -------
-    np.ndarray
-        Colored noise samples with unit variance, shape = size
     """
     if rng is None:
         rng = np.random.default_rng()
@@ -103,13 +84,6 @@ class ColoredNoiseProcess:
         self.idx = 0
     
     def sample(self):
-        """
-        Get one timestep of colored noise.
-        
-        Returns
-        -------
-        np.ndarray, shape (action_dim,)
-        """
         if self.idx >= self.seq_len:
             self._generate_buffer()
         noise = self.buffer[:, self.idx]
@@ -117,13 +91,6 @@ class ColoredNoiseProcess:
         return noise
     
     def sample_batch(self, batch_size):
-        """
-        Get a batch of consecutive colored noise samples.
-        
-        Returns
-        -------
-        np.ndarray, shape (batch_size, action_dim)
-        """
         samples = []
         for _ in range(batch_size):
             samples.append(self.sample())
@@ -177,21 +144,7 @@ class Actor(nn.Module):
     
     def sample(self, obs, deterministic=False, with_logprob=True, 
                external_noise=None):
-        """
-        Sample action from policy.
-        
-        Parameters
-        ----------
-        obs : torch.Tensor
-        deterministic : bool
-            If True, return tanh(mean)
-        with_logprob : bool
-            If True, compute log probability
-        external_noise : torch.Tensor, optional
-            Pre-generated noise (e.g. pink noise) to use instead of
-            iid Gaussian. Shape must match (batch, action_dim).
-            Reparameterization: x = mean + std * noise
-        """
+
         mean, log_std = self.forward(obs)
         
         if deterministic:
@@ -281,16 +234,7 @@ class SAC:
                  pink_noise=False,
                  noise_beta=1.0,
                  noise_seq_len=1000):
-        """
-        Parameters
-        ----------
-        pink_noise : bool
-            If True, use colored noise for exploration instead of iid Gaussian.
-        noise_beta : float
-            Color exponent. 1.0 = pink (recommended). 0 = white. 2 = red.
-        noise_seq_len : int
-            Length of pre-generated noise buffer.
-        """
+
         self.device = device
         self.gamma = gamma
         self.tau = tau
