@@ -66,6 +66,16 @@ def short_model_name(name):
     return os.path.basename(name)
 
 
+def model_name_to_spec(model_name):
+    """Derive algorithm-reward spec from model name, e.g. sac-attack-r1 -> sac-attack, td3-defense-r5 -> td3-defense."""
+    import re
+    short = short_model_name(model_name)
+    if short in ("weak", "strong"):
+        return short
+    m = re.match(r"^(.+)-r\d+$", short, re.IGNORECASE)
+    return m.group(1) if m else short
+
+
 class _BuiltinAgentWrapper:
     """Wraps BasicOpponent so it can be used as agent1 in evaluate() (select_action API)."""
 
@@ -250,7 +260,7 @@ def aggregate_results(raw_results):
     Returns (per_model, per_group, best_per_group).
     per_model: dict (group_name, model_a_name) -> {mean_reward, std_reward, wins, losses, draws, n_games, win_rate, draw_rate, loss_rate}
     per_group: dict group_name -> {mean_reward, std_reward, wins, losses, draws, n_games, win_rate, draw_rate, loss_rate}
-    best_per_group: dict group_name -> model_a_name (best = argmax over models of (mean_reward - 3*std_reward))
+    best_per_group: dict group_name -> model_a_name (best = argmax over models of mean_reward)
     """
     model_w = defaultdict(lambda: {"rewards": [], "stds": [], "wins": 0, "losses": 0, "draws": 0, "n": 0})
     for r in raw_results:
@@ -300,14 +310,41 @@ def aggregate_results(raw_results):
         if not models_in_group:
             best_per_group[group_name] = None
             continue
-        best_model = max(models_in_group, key=lambda m: per_model[(group_name, m)]["mean_reward"] - 3 * per_model[(group_name, m)]["std_reward"])
+        best_model = max(models_in_group, key=lambda m: per_model[(group_name, m)]["mean_reward"])
         best_per_group[group_name] = best_model
 
     return per_model, per_group, best_per_group
 
 
+def aggregate_by_spec(per_model):
+    """Aggregate per_model across groups (rounds) by algorithm-reward spec.
+    Returns per_spec: dict spec_name -> {mean_reward, std_reward, wins, losses, draws, n_games, win_rate, draw_rate, loss_rate}.
+    """
+    spec_w = defaultdict(lambda: {"means": [], "stds": [], "wins": 0, "losses": 0, "draws": 0, "n": 0})
+    for (group_name, model_a_name), stats in per_model.items():
+        spec = model_name_to_spec(model_a_name)
+        spec_w[spec]["means"].append(stats["mean_reward"])
+        spec_w[spec]["stds"].append(stats["std_reward"])
+        spec_w[spec]["wins"] += stats["wins"]
+        spec_w[spec]["losses"] += stats["losses"]
+        spec_w[spec]["draws"] += stats["draws"]
+        spec_w[spec]["n"] += stats["n_games"]
+    per_spec = {}
+    for spec, w in spec_w.items():
+        n = w["n"]
+        per_spec[spec] = {
+            "mean_reward": np.mean(w["means"]),
+            "std_reward": np.std(w["means"]) if len(w["means"]) > 1 else (np.mean(w["stds"]) if w["stds"] else 0.0),
+            "wins": w["wins"], "losses": w["losses"], "draws": w["draws"], "n_games": n,
+            "win_rate": 100.0 * w["wins"] / n if n else 0,
+            "draw_rate": 100.0 * w["draws"] / n if n else 0,
+            "loss_rate": 100.0 * w["losses"] / n if n else 0,
+        }
+    return per_spec
+
+
 def plot_within_group_return(per_model, best_per_group, output_dir):
-    """One figure per group: horizontal bar chart of mean reward +/- std; highlight best model (mean − 3*std)."""
+    """One figure per group: horizontal bar chart of mean reward +/- std; highlight best model (highest mean)."""
     os.makedirs(output_dir, exist_ok=True)
     groups = sorted({g for (g, _) in per_model})
     for group_name in groups:
@@ -334,7 +371,7 @@ def plot_within_group_return(per_model, best_per_group, output_dir):
         ax.set_yticklabels(labels, fontsize=9)
         ax.set_xlabel("Mean reward")
         ax.set_ylabel("Model")
-        ax.set_title(f"Mean reward vs evaluation group — {group_name}\n(best (mean − 3*std), highlighted)")
+        ax.set_title(f"Mean reward vs evaluation group — {group_name}\n(best (highest mean), highlighted)")
         ax.axvline(0, color="gray", linestyle="--", linewidth=0.8)
         fig.tight_layout()
         safe_name = "".join(c if c.isalnum() or c in "._-" else "_" for c in group_name)
@@ -348,8 +385,7 @@ def plot_group_level_return(per_group, output_dir):
     group_names = sorted(per_group.keys())
     means = [per_group[g]["mean_reward"] for g in group_names]
     stds = [per_group[g]["std_reward"] for g in group_names]
-    scores = [m - 3 * s for m, s in zip(means, stds)]
-    best_idx = int(np.argmax(scores)) if group_names else None
+    best_idx = int(np.argmax(means)) if group_names else None
     colors = ["#2ecc71" if i == best_idx else "#3498db" for i in range(len(group_names))]
     x = np.arange(len(group_names))
     fig, ax = plt.subplots(figsize=(max(6, len(group_names) * 1.2), 5))
@@ -365,7 +401,7 @@ def plot_group_level_return(per_group, output_dir):
     ax.set_xticklabels(group_names, rotation=45, ha="right")
     ax.set_ylabel("Mean reward (aggregate)")
     ax.set_xlabel("Group")
-    ax.set_title("Group-level mean reward vs evaluation group\n(best (mean − 3*std), highlighted)")
+    ax.set_title("Group-level mean reward vs evaluation group\n(best (highest mean), highlighted)")
     ax.axhline(0, color="gray", linestyle="--", linewidth=0.8)
     fig.tight_layout()
     fig.savefig(os.path.join(output_dir, "reward_by_group.png"), dpi=150)
@@ -401,7 +437,7 @@ def plot_within_group_wdl(per_model, best_per_group, output_dir):
         ax.set_ylabel("Rate (%)")
         ax.set_xlabel("Model")
         ax.set_title(f"Win / Draw / Loss vs evaluation group — {group_name}")
-        ax.legend(loc="upper right")
+        ax.legend(loc="lower right")
         ax.set_ylim(0, 100)
         fig.tight_layout()
         safe_name = "".join(c if c.isalnum() or c in "._-" else "_" for c in group_name)
@@ -433,11 +469,120 @@ def plot_group_level_wdl(per_group, output_dir):
     ax.set_ylabel("Rate (%)")
     ax.set_xlabel("Group")
     ax.set_title("Group-level Win / Draw / Loss vs evaluation group")
-    ax.legend(loc="upper right")
+    ax.legend(loc="lower right")
     ax.set_ylim(0, 100)
     fig.tight_layout()
     fig.savefig(os.path.join(output_dir, "wdl_by_group.png"), dpi=150)
     plt.close(fig)
+
+
+def plot_spec_return(per_spec, output_dir):
+    """Bar chart: mean reward ± std per algorithm-reward spec (average across groups/rounds)."""
+    os.makedirs(output_dir, exist_ok=True)
+    spec_names = sorted(per_spec.keys())
+    if not spec_names:
+        return
+    means = [per_spec[s]["mean_reward"] for s in spec_names]
+    stds = [per_spec[s]["std_reward"] for s in spec_names]
+    x = np.arange(len(spec_names))
+    fig, ax = plt.subplots(figsize=(max(6, len(spec_names) * 1.0), 5))
+    ax.bar(x, means, yerr=stds, capsize=5, color="#3498db", error_kw={"linewidth": 1.5})
+    ax.grid(axis="y", linestyle="--", alpha=0.7)
+    ax.set_xticks(x)
+    ax.set_xticklabels(spec_names, rotation=45, ha="right")
+    ax.set_ylabel("Mean reward (aggregate across rounds)")
+    ax.set_xlabel("Algorithm–reward spec")
+    ax.set_title("Average spec performance vs evaluation group (across rounds)")
+    ax.axhline(0, color="gray", linestyle="--", linewidth=0.8)
+    fig.tight_layout()
+    fig.savefig(os.path.join(output_dir, "reward_by_spec.png"), dpi=150)
+    plt.close(fig)
+
+
+def plot_spec_wdl(per_spec, output_dir):
+    """Stacked bar: win% / draw% / loss% per algorithm-reward spec (average across groups/rounds)."""
+    os.makedirs(output_dir, exist_ok=True)
+    spec_names = sorted(per_spec.keys())
+    if not spec_names:
+        return
+    win_rates = [per_spec[s]["win_rate"] for s in spec_names]
+    draw_rates = [per_spec[s]["draw_rate"] for s in spec_names]
+    loss_rates = [per_spec[s]["loss_rate"] for s in spec_names]
+    x = np.arange(len(spec_names))
+    width = 0.6
+    fig, ax = plt.subplots(figsize=(max(6, len(spec_names) * 1.0), 5))
+    ax.bar(x, win_rates, width, label="Win %", color="#2ecc71")
+    ax.bar(x, draw_rates, width, bottom=win_rates, label="Draw %", color="#f1c40f")
+    ax.bar(x, loss_rates, width, bottom=np.array(win_rates) + np.array(draw_rates), label="Loss %", color="#e74c3c")
+    for i in range(len(spec_names)):
+        bottom = 0
+        for rate in [win_rates[i], draw_rates[i], loss_rates[i]]:
+            if rate >= 3:
+                ax.text(i, bottom + rate / 2, f"{rate:.0f}%", ha="center", va="center", fontsize=8)
+            bottom += rate
+    ax.set_xticks(x)
+    ax.set_xticklabels(spec_names, rotation=45, ha="right")
+    ax.set_ylabel("Rate (%)")
+    ax.set_xlabel("Algorithm–reward spec")
+    ax.set_title("Average spec Win / Draw / Loss vs evaluation group (across rounds)")
+    ax.legend(loc="lower right")
+    ax.set_ylim(0, 100)
+    fig.tight_layout()
+    fig.savefig(os.path.join(output_dir, "wdl_by_spec.png"), dpi=150)
+    plt.close(fig)
+
+
+def write_1v1_csv_and_print_table(raw_results, output_dir, round_name=None):
+    """Build 1v1 table (player1 vs player2, mean_reward ± std, win/draw/loss rate), sort by mean reward, write CSV and print table.
+    If round_name is given, only include results with that round_name and use it in the filename and header."""
+    import csv
+    os.makedirs(output_dir, exist_ok=True)
+    if round_name is not None:
+        subset = [r for r in raw_results if r.get("round_name") == round_name]
+    else:
+        subset = raw_results
+    rows = []
+    for r in subset:
+        n = r["n_episodes"]
+        wr = 100.0 * r["wins"] / n if n else 0
+        dr = 100.0 * r["draws"] / n if n else 0
+        lr = 100.0 * r["losses"] / n if n else 0
+        mean_std = f"{r['mean_reward']:.2f} ± {r['std_reward']:.2f}"
+        rows.append({
+            "player1": r["model_a_name"],
+            "player2": r["eval_opponent_name"],
+            "mean_reward_std": mean_std,
+            "mean_reward": r["mean_reward"],
+            "std_reward": r["std_reward"],
+            "win_rate": wr,
+            "draw_rate": dr,
+            "loss_rate": lr,
+        })
+    rows.sort(key=lambda x: x["mean_reward"], reverse=True)
+    safe = f"_{round_name}" if round_name else ""
+    csv_path = os.path.join(output_dir, f"1v1_results{safe}.csv")
+    with open(csv_path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=["player1", "player2", "mean_reward_std", "mean_reward", "std_reward", "win_rate", "draw_rate", "loss_rate"])
+        w.writeheader()
+        w.writerows(rows)
+    title = f"1v1 performance — {round_name} (sorted by mean reward)" if round_name else "1v1 performance (sorted by mean reward)"
+    print(f"\n{title}")
+    print("-" * 115)
+    fmt_h = "{:<28} {:<28} {:>18} {:>8} {:>8} {:>8}"
+    fmt_r = "{:<28} {:<28} {:>18} {:>7.1f}% {:>7.1f}% {:>7.1f}%"
+    print(fmt_h.format("Player 1", "Player 2", "Mean reward ± std", "Win%", "Draw%", "Loss%"))
+    print("-" * 115)
+    for r in rows:
+        p1 = short_model_name(r["player1"])
+        p2 = short_model_name(r["player2"])
+        if len(p1) > 27:
+            p1 = p1[:24] + "..."
+        if len(p2) > 27:
+            p2 = p2[:24] + "..."
+        mean_std = f"{r['mean_reward']:.2f} ± {r['std_reward']:.2f}"
+        print(fmt_r.format(p1, p2, mean_std, r["win_rate"], r["draw_rate"], r["loss_rate"]))
+    print("-" * 115)
+    print(f"CSV saved to {csv_path}")
 
 
 def main():
@@ -471,35 +616,95 @@ def main():
         if args.config:
             with open(args.config, "r") as f:
                 cfg = json.load(f)
-            groups = cfg["groups"]
-            evaluation_group = cfg["evaluation_group"]
+            round_matchups_meta = None
+            if "round_matchups" in cfg:
+                round_matchups_meta = cfg["round_matchups"]
+                groups = []
+                for entry in round_matchups_meta:
+                    groups.append(entry["defensive"])
+                    groups.append(entry["offensive"])
+                    if "default" in entry:
+                        groups.append(entry["default"])
+            elif "pairwise_groups" in cfg:
+                pair = cfg["pairwise_groups"]
+                if len(pair) != 2:
+                    print("pairwise_groups must contain exactly two groups.")
+                    return
+                groups = pair
+                evaluation_group = None
+            else:
+                groups = cfg["groups"]
+                evaluation_group = cfg["evaluation_group"]
         else:
             groups = GROUPS
             evaluation_group = EVALUATION_GROUP
+            round_matchups_meta = None
         env = h_env.HockeyEnv()
-        print("Running group vs evaluation-group evaluation...")
-        raw_results = run_group_evaluation(
-            groups, evaluation_group, env, h_env,
-            n_episodes=args.num_episodes, max_steps=args.max_steps, device=device,
-            hidden_sizes=args.hidden_sizes
-        )
-        per_model, per_group, best_per_group = aggregate_results(raw_results)
+        if round_matchups_meta is not None:
+            print("Running round matchups (defensive vs offensive vs default per round)...")
+            raw_results = []
+            for entry in round_matchups_meta:
+                rname = entry["name"]
+                def_grp, off_grp = entry["defensive"], entry["offensive"]
+                pairs = [(def_grp, off_grp), (off_grp, def_grp)]
+                if "default" in entry:
+                    default_grp = entry["default"]
+                    pairs.extend([(def_grp, default_grp), (default_grp, def_grp), (off_grp, default_grp), (default_grp, off_grp)])
+                for grp_a, grp_b in pairs:
+                    r_ab = run_group_evaluation(
+                        [grp_a], grp_b, env, h_env,
+                        n_episodes=args.num_episodes, max_steps=args.max_steps, device=device,
+                        hidden_sizes=args.hidden_sizes
+                    )
+                    for r in r_ab:
+                        r["round_name"] = rname
+                    raw_results.extend(r_ab)
+        elif evaluation_group is not None:
+            print("Running group vs evaluation-group evaluation...")
+            raw_results = run_group_evaluation(
+                groups, evaluation_group, env, h_env,
+                n_episodes=args.num_episodes, max_steps=args.max_steps, device=device,
+                hidden_sizes=args.hidden_sizes
+            )
+        else:
+            print("Running pairwise evaluation (each group vs the other)...")
+            raw_a = run_group_evaluation(
+                [groups[0]], groups[1], env, h_env,
+                n_episodes=args.num_episodes, max_steps=args.max_steps, device=device,
+                hidden_sizes=args.hidden_sizes
+            )
+            raw_b = run_group_evaluation(
+                [groups[1]], groups[0], env, h_env,
+                n_episodes=args.num_episodes, max_steps=args.max_steps, device=device,
+                hidden_sizes=args.hidden_sizes
+            )
+            raw_results = raw_a + raw_b
         os.makedirs(args.output_dir, exist_ok=True)
-        plot_within_group_return(per_model, best_per_group, args.output_dir)
-        plot_group_level_return(per_group, args.output_dir)
-        plot_within_group_wdl(per_model, best_per_group, args.output_dir)
-        plot_group_level_wdl(per_group, args.output_dir)
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        results_path = os.path.join(args.output_dir, f"results_{ts}.json")
-        with open(results_path, "w") as f:
+        if round_matchups_meta is not None:
+            for entry in round_matchups_meta:
+                write_1v1_csv_and_print_table(raw_results, args.output_dir, round_name=entry["name"])
+            out = {"raw_results": raw_results}
+        else:
+            per_model, per_group, best_per_group = aggregate_results(raw_results)
+            plot_within_group_return(per_model, best_per_group, args.output_dir)
+            plot_group_level_return(per_group, args.output_dir)
+            plot_within_group_wdl(per_model, best_per_group, args.output_dir)
+            plot_group_level_wdl(per_group, args.output_dir)
+            per_spec = aggregate_by_spec(per_model)
+            plot_spec_return(per_spec, args.output_dir)
+            plot_spec_wdl(per_spec, args.output_dir)
             out = {
                 "raw_results": raw_results,
                 "per_model": {f"{g}|{m}": v for (g, m), v in per_model.items()},
                 "per_group": per_group,
                 "best_per_group": best_per_group,
+                "per_spec": per_spec,
             }
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        results_path = os.path.join(args.output_dir, f"results_{ts}.json")
+        with open(results_path, "w") as f:
             json.dump(out, f, indent=2)
-        print(f"Plots and results saved to {args.output_dir} (results: {results_path})")
+        print(f"Results saved to {args.output_dir} (results: {results_path})")
         env.close()
         return
 
