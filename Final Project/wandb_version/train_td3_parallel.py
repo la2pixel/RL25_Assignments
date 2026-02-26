@@ -20,9 +20,7 @@ except ImportError:
     wandb = None
 
 
-# ============================================================
 # Reward Wrapper
-# ============================================================
 
 class AttackRewardWrapper(gym.Wrapper):
     """
@@ -115,51 +113,6 @@ class DefenseRewardWrapper(gym.Wrapper):
         return obs, shaped, done, trunc, info
 
 
-class ProvenRewardWrapper(gym.Wrapper):
-    """
-    Proven reward shaping from reference implementation.
-    - Strong closeness signal (5x) drives agent toward puck
-    - Idle penalty when not touching (-0.1 per step)
-    - One-time touch bonus proportional to step (rewards fast engagement)
-    """
-    def __init__(self, env):
-        super().__init__(env)
-        self.touched = 0
-        self.first_time_touch = 1
-        self.step_count = 0
-
-    def reset(self, **kwargs):
-        obs, info = self.env.reset(**kwargs)
-        self.touched = 0
-        self.first_time_touch = 1
-        self.step_count = 0
-        return obs, info
-
-    def step(self, action):
-        obs, reward, done, trunc, info = self.env.step(action)
-        self.step_count += 1
-
-        closeness = info.get('reward_closeness_to_puck', 0)
-        touch = info.get('reward_touch_puck', 0)
-
-        self.touched = max(self.touched, touch)
-
-        shaped = (
-            reward
-            + 5 * closeness
-            - (1 - self.touched) * 0.1
-            + self.touched * self.first_time_touch * 0.1 * self.step_count
-        )
-
-        self.first_time_touch = 1 - self.touched
-
-        return obs, shaped, done, trunc, info
-
-
-# ============================================================
-# Env Factory
-# ============================================================
-
 def make_env(opponent_type, rank=0, opponent_model_path=None, reward_mode='default'):
     def _thunk():
         raw_env = h_env.HockeyEnv()
@@ -194,15 +147,11 @@ def make_env(opponent_type, rank=0, opponent_model_path=None, reward_mode='defau
             return AttackRewardWrapper(raw_env)
         elif reward_mode == 'defense':
             return DefenseRewardWrapper(raw_env)
-        elif reward_mode == 'proven':
-            return ProvenRewardWrapper(raw_env)
         return raw_env
     return _thunk
 
 
-# ============================================================
 # Evaluation
-# ============================================================
 
 def evaluate(agent, env, num_episodes=5):
     total_reward = 0
@@ -221,9 +170,7 @@ def evaluate(agent, env, num_episodes=5):
     return total_reward / num_episodes, wins / num_episodes
 
 
-# ============================================================
 # Training Loop
-# ============================================================
 
 def train_parallel(args):
     start_time = time.time()
@@ -471,7 +418,7 @@ if __name__ == "__main__":
     # Experiment flags
     parser.add_argument('--reward_mode', type=str, default='default',
                         choices=['default', 'attack', 'defense', 'proven'],
-                        help='Reward shaping: default (raw), attack (offensive), defense (defensive), proven (reference)')
+                        help='Reward shaping: default (raw), attack (offensive), defense (defensive)')
 
     args = parser.parse_args()
     train_parallel(args)
